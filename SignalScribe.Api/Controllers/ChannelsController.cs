@@ -103,6 +103,7 @@ public class ChannelsController(SignalScribeContext db) : ControllerBase
         c.Notes,
         c.NoiseFloorDbfs,
         c.LearnedState?.CtcssToneHz,
+        c.LearnedState?.DcsCode,
         transmissionCount,
         lastHeardUtc,
         c.AutoDisabledReason,

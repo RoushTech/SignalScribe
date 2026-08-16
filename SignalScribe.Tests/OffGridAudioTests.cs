@@ -9,8 +9,12 @@ namespace SignalScribe.Tests;
 ///
 /// The 12.5 kHz analysis grid does not align with the 5 kHz channel plan, so a channel lands 0,
 /// 2.5 or 5 kHz off a bin centre. At 5 kHz the bin clips one side of the FM sideband and the
-/// discriminator recovers a badly distorted tone — which is what 147.255 (measured +4924 Hz off
-/// the 147.250 bin, the worst case the grid allows) sounds like on air.
+/// discriminator recovers a distorted tone — which is what 147.255 (measured +4924 Hz off the
+/// 147.250 bin, the worst case the grid allows) sounds like on air.
+///
+/// Most of that distortion turned out to land below 300 Hz, so the CTCSS high-pass takes the worst
+/// case from 45% down to 6.4%. The shape survives — half a bin off is still 13x a centred carrier —
+/// so this still pins the relationship, at the levels that now reach the operator.
 /// </summary>
 public class OffGridAudioTests(ITestOutputHelper output)
 {
@@ -43,11 +47,11 @@ public class OffGridAudioTests(ITestOutputHelper output)
         // Pin the relationship rather than an exact figure: on-grid is clean, half a bin off is not.
         if (Math.Abs(offsetHz) < 1_000)
         {
-            Assert.True(thd < 0.10, $"a centred carrier should demodulate cleanly, got {thd:P1}");
+            Assert.True(thd < 0.02, $"a centred carrier should demodulate cleanly, got {thd:P1}");
         }
         else if (Math.Abs(offsetHz) >= 5_000)
         {
-            Assert.True(thd > 0.30, $"a carrier half a bin off should be visibly distorted, got {thd:P1}");
+            Assert.True(thd > 0.04, $"a carrier half a bin off should still be measurably worse, got {thd:P1}");
         }
     }
 

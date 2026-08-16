@@ -498,3 +498,4 @@ data/
 
 # Inference models — gigabytes, fetched by scripts/download-models.sh
 models/
+dist/

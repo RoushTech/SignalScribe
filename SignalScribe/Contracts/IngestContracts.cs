@@ -16,7 +16,9 @@ public record TransmissionIngest(
     double? MeanCarrierOffsetHz,
     bool IsDouble,
     List<MarkerIngest> Markers,
-    int VoicedMs = 0);
+    int VoicedMs = 0,
+    double? CtcssHz = null,
+    int? DcsCode = null);
 
 /// <summary>A clip the capture-side gate rejected. Kept briefly so the operator can hear it and see why.</summary>
 public record DiscardIngest(
@@ -25,12 +27,14 @@ public record DiscardIngest(
     DateTime EndUtc,
     string AudioPath,
     double PeakDbfs,
-    string Reason,
+    SignalScribe.Enums.DiscardReason Reason,
     int VoicedMs,
     double SpeechBandRatio,
     double ModulationDepth,
     double SyllableRateHz,
-    bool SustainedTone);
+    bool SustainedTone,
+    double? CtcssHz = null,
+    int? DcsCode = null);
 
 public record TransmissionIngestResult(long TransmissionId, bool AlreadyExisted);
 

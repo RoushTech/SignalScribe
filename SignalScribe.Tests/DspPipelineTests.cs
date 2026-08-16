@@ -97,6 +97,78 @@ public class DspPipelineTests
         Assert.False(noise.Finish().VoiceLike, "white noise should fail the voice gate");
     }
 
+    /// <summary>
+    /// Observed on 147.180: someone talking over a steady background tone. The tone is audible in
+    /// the gaps between words, so every pause reads as a pure tone and the gate threw the whole
+    /// transmission away — 13 s of speech scoring 864 ms voiced and 0.15 speech ratio, because the
+    /// tone outweighed the talking in the denominator of every frame.
+    /// </summary>
+    [Theory]
+    [InlineData(120, 0.45)]    // hum or leaked CTCSS below the band — de-emphasis makes these loud
+    [InlineData(3_400, 0.12)]  // link or data tone above it, as it survives 750us de-emphasis
+    public void SpeechOverABackgroundToneStillCountsAsVoice(double toneHz, double toneAmplitude)
+    {
+        var a = new AudioAnalyzer();
+        a.Feed(MakeAudio(16_000 * 3, n =>
+        {
+            // Someone talking with a pause in the middle, over a tone that never stops. The pause is
+            // the whole point: that is where the tone is alone and reads as a sustained pure tone.
+            var t = n / 16_000.0;
+            var talking = t is < 1.2 or > 1.9;
+            var tone = (float)toneAmplitude * MathF.Sin(2 * MathF.PI * (float)toneHz * n / 16_000f);
+            return (talking ? SpeechLikeSample(n) : 0f) + tone;
+        }));
+
+        var v = a.Finish();
+        Assert.True(v.SustainedTone, "the tone is real and should still be reported");
+        Assert.True(v.VoiceLike, $"speech over a {toneHz} Hz tone should still pass, got {v}");
+    }
+
+    /// <summary>
+    /// Observed on 146.925: a transmission with an audible hum came through flagged [double], so it
+    /// was never transcribed. A double is two carriers beating into a whistle in the voice band —
+    /// hum sits below it and is something the speech rides on, not a second station.
+    /// </summary>
+    [Fact]
+    public void HumDoesNotMakeATransmissionADouble()
+    {
+        var withHum = new AudioAnalyzer();
+        withHum.Feed(MakeAudio(16_000 * 3, n =>
+        {
+            var t = n / 16_000.0;
+            var talking = t is < 1.2 or > 1.9;
+            return (talking ? SpeechLikeSample(n) : 0f) + 0.45f * MathF.Sin(2 * MathF.PI * 120 * n / 16_000f);
+        }));
+
+        var hum = withHum.Finish();
+        Assert.True(hum.SustainedTone, "the hum is a steady tone and should still be reported as one");
+        Assert.False(hum.HeterodyneTone, "a 120 Hz hum is not two carriers beating");
+        Assert.True(hum.VoiceLike);
+
+        // A real double: a beat note in the voice band, running the whole way through.
+        var doubled = new AudioAnalyzer();
+        doubled.Feed(MakeAudio(16_000 * 3, n => 0.5f * MathF.Sin(2 * MathF.PI * 900 * n / 16_000f)));
+
+        var beat = doubled.Finish();
+        Assert.True(beat.HeterodyneTone, "a 900 Hz beat note is what a double sounds like");
+        Assert.False(beat.VoiceLike);
+    }
+
+    /// <summary>A tone *inside* the voice band can be mistaken for speech, so it must still be refused.</summary>
+    [Fact]
+    public void AnInBandToneIsStillNotVoiceEvenWhenItIsInterrupted()
+    {
+        // Interrupted 1 kHz tone: syllable-rate on/off keying, in-band, but no speech under it.
+        var a = new AudioAnalyzer();
+        a.Feed(MakeAudio(16_000 * 3, n =>
+        {
+            var gate = Math.Sin(2 * Math.PI * 4 * n / 16_000.0) > 0 ? 1f : 0f;
+            return gate * 0.5f * MathF.Sin(2 * MathF.PI * 1000 * n / 16_000f);
+        }));
+
+        Assert.False(a.Finish().VoiceLike, "an in-band tone must not pass as speech");
+    }
+
     [Fact]
     public void EndToEndBurstProducesClipAndIngest()
     {
@@ -482,6 +554,53 @@ public class DspPipelineTests
             bank.CloseAll(long.MaxValue / 2);
 
             Assert.NotEmpty(posted);
+        }
+        finally
+        {
+            Directory.Delete(audioRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// The API reports overload after the fact: on air, seven gates opened at peaks up to -1.9 dBFS
+    /// in the moments before the event arrived, and one that opened as it cleared stayed up for 49
+    /// seconds. So the flag arriving must disown gates opened just before it, and gates must stay
+    /// shut through the recovery afterwards rather than opening into the AGC transient.
+    /// </summary>
+    [Fact]
+    public void GatesOpenedJustBeforeAnOverloadIsReportedAreDisowned()
+    {
+        var audioRoot = Path.Combine(Path.GetTempPath(), $"ss-late-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(audioRoot);
+        try
+        {
+            var channelizer = new PolyphaseChannelizer(Fs, Spacing);
+            var posted = new List<TransmissionIngest>();
+            var discarded = new List<DiscardIngest>();
+            var bank = new ChannelBank(
+                channelizer.ChannelCount, channelizer.OutputSampleRate, CenterHz,
+                bin => channelizer.BinFrequencyHz(bin, CenterHz),
+                openDb: 8, closeDb: 5, hangMs: 300,
+                audioRoot, DateTime.UtcNow,
+                _ => true, posted.Add, NullLogger.Instance, postDiscard: discarded.Add);
+            var sink = new ForwardSink(bank);
+
+            channelizer.Process(MakeNoise(0.4), sink);
+
+            // The beacon keys up and gates open — the hardware has not told us yet.
+            channelizer.Process(MakeBandBurst(2, 0.2), sink);
+            Assert.True(bank.OpenGateCount > 0, "expected gates to open before the flag arrives");
+
+            // Now the report lands, late.
+            bank.Overloaded = true;
+            channelizer.Process(MakeBandBurst(2, 0.2), sink);
+            bank.Overloaded = false;
+            channelizer.Process(MakeNoise(1.0), sink);
+            bank.CloseAll(long.MaxValue / 2);
+
+            Assert.Empty(posted);
+            Assert.Equal(0, bank.OpenGateCount);
+            Assert.All(discarded, d => Assert.Equal(DiscardReason.FrontEndOverload, d.Reason));
         }
         finally
         {

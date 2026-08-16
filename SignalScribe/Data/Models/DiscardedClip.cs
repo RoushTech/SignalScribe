@@ -24,7 +24,7 @@ public class DiscardedClip : IEntityTypeConfiguration<DiscardedClip>
     public double PeakDbfs { get; set; }
 
     /// <summary>Why it was rejected, e.g. "not voice" or "only 120 ms of signal".</summary>
-    public string Reason { get; set; } = string.Empty;
+    public SignalScribe.Enums.DiscardReason Reason { get; set; }
 
     public int VoicedMs { get; set; }
 
@@ -36,10 +36,15 @@ public class DiscardedClip : IEntityTypeConfiguration<DiscardedClip>
 
     public bool SustainedTone { get; set; }
 
+    /// <summary>CTCSS tone measured under the clip, in Hz — tells you whose system a rejected signal belonged to.</summary>
+    public double? CtcssHz { get; set; }
+
+    /// <summary>DCS code decoded from the clip, as the octal number operators quote.</summary>
+    public int? DcsCode { get; set; }
+
     public void Configure(EntityTypeBuilder<DiscardedClip> builder)
     {
         builder.HasIndex(d => d.StartUtc);
         builder.Property(d => d.AudioPath).HasMaxLength(512);
-        builder.Property(d => d.Reason).HasMaxLength(128);
     }
 }

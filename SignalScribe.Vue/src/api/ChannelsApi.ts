@@ -18,6 +18,7 @@ export interface ChannelDto {
   notes: string | null;
   noiseFloorDbfs: number | null;
   measuredCtcssToneHz: number | null;
+  measuredDcsCode: number | null;
   transmissionCount: number;
   lastHeardUtc: string | null;
   autoDisabledReason: string | null;

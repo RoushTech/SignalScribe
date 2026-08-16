@@ -5,14 +5,16 @@ public record DiscardDto(
     long FrequencyHz,
     DateTime StartUtc,
     int DurationMs,
-    string Reason,
+    SignalScribe.Enums.DiscardReason Reason,
     double PeakDbfs,
     int VoicedMs,
     double SpeechBandRatio,
     double ModulationDepth,
     double SyllableRateHz,
-    bool SustainedTone);
+    bool SustainedTone,
+    double? CtcssHz,
+    int? DcsCode);
 
-public record ReasonCountDto(string Reason, int Count);
+public record ReasonCountDto(SignalScribe.Enums.DiscardReason Reason, int Count);
 
 public record DiscardStatsDto(int Total, DateTime? OldestUtc, IReadOnlyList<ReasonCountDto> ByReason);

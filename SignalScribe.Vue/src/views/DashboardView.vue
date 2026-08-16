@@ -104,6 +104,42 @@ onUnmounted(() => {
   hub?.stop();
   if (statsTimer) clearInterval(statsTimer);
 });
+/** Squelch tone heard on a transmission, and whether it is what this channel normally runs. */
+function toneChip(t: TransmissionDto) {
+  const heard = t.ctcssHz
+    ? { label: t.ctcssHz.toFixed(1), what: `CTCSS ${t.ctcssHz.toFixed(1)} Hz` }
+    : t.dcsCode
+      ? { label: `D${String(t.dcsCode).padStart(3, "0")}`, what: `DCS ${String(t.dcsCode).padStart(3, "0")}` }
+      : null;
+
+  const expectsCtcss = t.channelCtcssHz;
+  const expectsDcs = t.channelDcsCode;
+  const expects = expectsCtcss
+    ? `CTCSS ${expectsCtcss.toFixed(1)} Hz`
+    : expectsDcs
+      ? `DCS ${String(expectsDcs).padStart(3, "0")}`
+      : null;
+
+  if (!heard) {
+    if (!expects) return null;
+    return {
+      label: "no tone",
+      color: "warning",
+      icon: "mdi-tune-variant-off",
+      detail: `Nothing under the voice, but this channel normally runs ${expects}. Either someone transmitted with their tone switched off, or the over was too short to read one.`,
+    };
+  }
+
+  const matches = !expects || heard.what === expects;
+  return {
+    label: heard.label,
+    color: matches ? undefined : "warning",
+    icon: matches ? "mdi-tune" : "mdi-tune-variant",
+    detail: matches
+      ? `${heard.what}, read from below the voice and filtered out of the audio.`
+      : `${heard.what}, but this channel normally runs ${expects}. A different system on the same frequency, or someone with the wrong tone set.`,
+  };
+}
 </script>
 
 <template>
@@ -273,8 +309,23 @@ onUnmounted(() => {
             <td>
               <audio :src="TransmissionsApi.audioUrl(t.id)" controls preload="none" style="height: 30px; width: 220px" />
             </td>
-            <td>
+            <td style="white-space: nowrap">
               <v-chip size="x-small" variant="outlined" :class="`text-${statusColor(t.status)}`">{{ t.status }}</v-chip>
+              <v-tooltip v-if="toneChip(t)" :text="toneChip(t)!.detail" location="bottom" max-width="360">
+                <template #activator="{ props }">
+                  <v-chip
+                    v-bind="props"
+                    size="x-small"
+                    variant="tonal"
+                    class="ml-1"
+                    style="cursor: help"
+                    :color="toneChip(t)!.color"
+                  >
+                    <v-icon start size="x-small" :icon="toneChip(t)!.icon" />
+                    {{ toneChip(t)!.label }}
+                  </v-chip>
+                </template>
+              </v-tooltip>
             </td>
             <td>
               <template v-if="!t.isDouble">

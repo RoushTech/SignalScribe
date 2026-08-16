@@ -47,6 +47,12 @@ public sealed class NbfmDemodulator
 
     private float _deemphState;
 
+    private readonly Biquad _audioHighPass1;
+
+    private readonly Biquad _audioHighPass2;
+
+    private readonly SubaudibleDetector _subaudible;
+
     private double _resamplePos = 1;
 
     private float _lastAudio;
@@ -67,9 +73,23 @@ public sealed class NbfmDemodulator
         _deemphasisAlpha = 1f - MathF.Exp((float)(-1.0 / (inputSampleRate * 750e-6))); // 750 µs
         _resampleStep = inputSampleRate / OutputSampleRate;
         _dcSlowAlpha = (float)(1.0 - Math.Exp(-1.0 / (inputSampleRate * 0.2)));       // ~200 ms
+        // Every FM receiver high-passes the audio: CTCSS and DCS live below 300 Hz, and 750 us
+        // de-emphasis is flat below its 212 Hz corner while rolling voice off above it, so the
+        // squelch tone arrives *louder* than the speech (measured: 55-76% of the recorded energy).
+        // The detector taps ahead of this filter, since the filter exists to discard what it reads.
+        // Two sections (24 dB/octave): one is not enough for the 254.1 Hz tone sitting on the corner.
+        _audioHighPass1 = Biquad.HighPass(300, OutputSampleRate);
+        _audioHighPass2 = Biquad.HighPass(300, OutputSampleRate);
+        _subaudible = new SubaudibleDetector(inputSampleRate);
         _blockDcLength = (int)(inputSampleRate * 0.1);
         _settleSamples = (long)(inputSampleRate * 0.1);
     }
+
+    /// <summary>CTCSS tone riding under the audio, in Hz, once enough of the over has been heard.</summary>
+    public double? CtcssHz => _subaudible.Ctcss();
+
+    /// <summary>DCS code riding under the audio, as the octal number operators quote.</summary>
+    public int? DcsCode => _subaudible.Dcs();
 
     /// <summary>Slow-tracked discriminator DC in Hz — used for DC removal and the quick-key fingerprint.</summary>
     public double CarrierOffsetHz => _dcSlowHz;
@@ -150,15 +170,17 @@ public sealed class NbfmDemodulator
             }
 
             var audio = (float)((freqHz - _dcSlowHz) / _deviationHz);
+            _subaudible.Feed(audio); // before the high-pass: this is the only place the tone exists
             _deemphState += _deemphasisAlpha * (audio - _deemphState);
             var limited = SoftLimit(_deemphState);
 
-            // Linear resample to 16 kHz.
+            // Linear resample to 16 kHz, then high-pass at the output rate so the coefficients match.
             _resamplePos -= 1;
             while (_resamplePos < 1 && written < pcm.Length)
             {
                 var frac = (float)_resamplePos;
-                pcm[written++] = _lastAudio + (limited - _lastAudio) * Math.Clamp(frac, 0f, 1f);
+                var interpolated = _lastAudio + ((limited - _lastAudio) * Math.Clamp(frac, 0f, 1f));
+                pcm[written++] = _audioHighPass2.Process(_audioHighPass1.Process(interpolated));
                 _resamplePos += _resampleStep;
             }
 

@@ -34,6 +34,12 @@ public class Transmission : IEntityTypeConfiguration<Transmission>
 
     public Session? Session { get; set; }
 
+    /// <summary>CTCSS tone measured under the audio, in Hz. Null when there was none, or too little audio to tell.</summary>
+    public double? CtcssHz { get; set; }
+
+    /// <summary>DCS code decoded from the sub-audible bitstream, as the octal number operators quote.</summary>
+    public int? DcsCode { get; set; }
+
     /// <summary>Model that last transcribed this clip, e.g. "whisper.net/ggml-small.en-q5_1.bin". Set even when the run found no speech, so "not yet processed" and "processed, nothing said" stay distinguishable.</summary>
     public string? TranscribedByModel { get; set; }
 

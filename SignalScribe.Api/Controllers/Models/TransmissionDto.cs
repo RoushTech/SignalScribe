@@ -10,6 +10,10 @@ public record TransmissionDto(
     bool IsDouble,
     string AudioPath,
     string Status,
+    double? CtcssHz,
+    int? DcsCode,
+    double? ChannelCtcssHz,
+    int? ChannelDcsCode,
     IReadOnlyList<SegmentDto> Segments);
 
 public record SegmentDto(

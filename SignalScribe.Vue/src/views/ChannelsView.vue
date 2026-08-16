@@ -4,6 +4,7 @@ import { useRouter } from "vue-router";
 import { ChannelsApi, ChannelType, type ChannelDto, type ChannelUpsertRequest } from "@/api/ChannelsApi";
 import { useChannelsStore } from "@/stores/channels";
 import { formatFrequency, formatLocal } from "@/lib/time";
+import { channelTone } from "@/lib/squelchTone";
 import ChannelEditDialog from "@/components/ChannelEditDialog.vue";
 
 const router = useRouter();
@@ -87,7 +88,22 @@ onMounted(() => store.refresh());
             </td>
             <td>{{ typeName(c.type) }}</td>
             <td>{{ c.callsign ?? "—" }}</td>
-            <td>{{ c.ctcssToneHz ? `${c.ctcssToneHz} Hz` : "—" }}</td>
+            <td>
+              <v-tooltip v-if="channelTone(c)" :text="channelTone(c)!.detail" location="bottom" max-width="340">
+                <template #activator="{ props }">
+                  <v-chip
+                    v-bind="props"
+                    size="x-small"
+                    :variant="channelTone(c)!.measured ? 'outlined' : 'tonal'"
+                    style="cursor: help"
+                  >
+                    <v-icon start size="x-small" :icon="channelTone(c)!.measured ? 'mdi-ear-hearing' : 'mdi-tune'" />
+                    {{ channelTone(c)!.label }}
+                  </v-chip>
+                </template>
+              </v-tooltip>
+              <span v-else>—</span>
+            </td>
             <td>{{ c.transmissionCount }}</td>
             <td>{{ formatLocal(c.lastHeardUtc) }}</td>
             <td>

@@ -48,11 +48,27 @@ public class EventsController(SignalScribeContext db, IHubContext<StatusHub> hub
             MeanCarrierOffsetHz = ingest.MeanCarrierOffsetHz,
             IsDouble = ingest.IsDouble,
             VoicedMs = ingest.VoicedMs,
+            CtcssHz = ingest.CtcssHz,
+            DcsCode = ingest.DcsCode,
             Markers = ingest.Markers
                 .Select(m => new Marker { Type = m.Type, OffsetMs = m.OffsetMs, Confidence = m.Confidence })
                 .ToList(),
         };
         db.Transmissions.Add(transmission);
+
+        // The tone identifies the system behind the frequency — two repeaters often share an output
+        // channel and the tone is what tells them apart. Learn it, but never overwrite what the
+        // operator configured by hand.
+        if ((ingest.CtcssHz is { } tone && channel.LearnedState?.CtcssToneHz != tone)
+            || (ingest.DcsCode is { } dcs && channel.LearnedState?.DcsCode != dcs))
+        {
+            var learned = channel.LearnedState ?? new ChannelLearnedState();
+            learned.CtcssToneHz = ingest.CtcssHz ?? learned.CtcssToneHz;
+            learned.DcsCode = ingest.DcsCode ?? learned.DcsCode;
+            learned.UpdatedUtc = DateTime.UtcNow;
+            channel.LearnedState = learned;
+        }
+
         await db.SaveChangesAsync();
 
         // Only transcribe clips with actual speech in them. Whisper hallucinates on noise — most
@@ -150,6 +166,8 @@ public class EventsController(SignalScribeContext db, IHubContext<StatusHub> hub
                 ModulationDepth = ingest.ModulationDepth,
                 SyllableRateHz = ingest.SyllableRateHz,
                 SustainedTone = ingest.SustainedTone,
+            CtcssHz = ingest.CtcssHz,
+            DcsCode = ingest.DcsCode,
             });
             await db.SaveChangesAsync();
         }

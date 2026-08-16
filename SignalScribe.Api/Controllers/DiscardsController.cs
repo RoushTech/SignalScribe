@@ -29,7 +29,9 @@ public class DiscardsController(SignalScribeContext db, IConfiguration config) :
                 d.SpeechBandRatio,
                 d.ModulationDepth,
                 d.SyllableRateHz,
-                d.SustainedTone))
+                d.SustainedTone,
+                d.CtcssHz,
+                d.DcsCode))
             .ToListAsync();
         return Ok(clips);
     }

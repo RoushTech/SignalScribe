@@ -70,6 +70,9 @@ public class ChannelLearnedState
 
     public double? CtcssToneHz { get; set; }
 
+    /// <summary>DCS code observed under this channel's traffic, as the octal number operators quote.</summary>
+    public int? DcsCode { get; set; }
+
     /// <summary>Repeater squelch-tail duration observed after user unkey, milliseconds.</summary>
     public int? TailMs { get; set; }
 

@@ -14,6 +14,7 @@ public record ChannelDto(
     string? Notes,
     double? NoiseFloorDbfs,
     double? MeasuredCtcssToneHz,
+    int? MeasuredDcsCode,
     int TransmissionCount,
     DateTime? LastHeardUtc,
     string? AutoDisabledReason,

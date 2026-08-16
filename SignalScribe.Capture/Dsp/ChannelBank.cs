@@ -116,14 +116,38 @@ public sealed class ChannelBank : IChannelizerSink
         get => _overloaded;
         set
         {
-            if (_overloaded && !value)
+            if (value && !_overloaded)
             {
-                _clearingOverload = true; // re-reference every floor once the real noise floor is back
+                _overloadJustDetected = true;
+            }
+            else if (_overloaded && !value)
+            {
+                // Do not re-reference the floors yet: the AGC is still recovering and the levels in
+                // this instant are a transient, not the noise floor. Hold gates shut through the
+                // guard and re-reference at the end of it, when what we measure is real again.
+                _overloadGuardBlocks = OverloadGuardBlocks;
             }
 
             _overloaded = value;
         }
     }
+
+    /// <summary>
+    /// How far back to disown gates when an overload is reported. The API's report lags the physical
+    /// clipping — measured on air, seven gates opened at peaks up to -1.9 dBFS in the moments before
+    /// the event arrived — so a gate that opened just before the report is part of the same event.
+    /// </summary>
+    private const double OverloadLookbackSeconds = 0.5;
+
+    /// <summary>
+    /// Blocks to keep gates shut after an overload clears. The front end does not recover instantly,
+    /// and a gate opened into that recovery latched for 49 s on air.
+    /// </summary>
+    private const int OverloadGuardBlocks = 50;   // ~0.5 s at 10.24 ms per block
+
+    private bool _overloadJustDetected;
+
+    private int _overloadGuardBlocks;
 
     /// <summary>Blocks to let the filterbank history fill and floors settle before any gate may open.</summary>
     private const int WarmupBlocks = 24;
@@ -257,6 +281,25 @@ public sealed class ChannelBank : IChannelizerSink
             db[c] -= _globalDb;
         }
 
+        if (_overloadJustDetected)
+        {
+            _overloadJustDetected = false;
+            var lookbackHops = (long)(OverloadLookbackSeconds * _outputRate);
+            foreach (var bin in _active.Keys.ToList())
+            {
+                if (hopIndex - _active[bin].GateOpenedHop <= lookbackHops)
+                {
+                    _active[bin].OverloadArtifact = true;
+                    _closing.Add(bin);
+                }
+            }
+        }
+
+        if (_overloadGuardBlocks > 0 && --_overloadGuardBlocks == 0)
+        {
+            _clearingOverload = true;
+        }
+
         // Coming out of overload the levels in front of us are real again, but every floor was
         // learned against clipped garbage (and every open gate froze its floor at a level that no
         // longer exists). Re-reference them all in one block: without this the channels that opened
@@ -272,7 +315,11 @@ public sealed class ChannelBank : IChannelizerSink
                     continue; // a transmission already in progress keeps its reference
                 }
 
-                _floorDb[c] = db[c];
+                // Only ever pull a floor *down* to what is there now. Overload drags floors upward
+                // (they adapt toward clipped garbage), and this restores them at once — but if a
+                // real transmission happens to be on the air as the guard expires, adopting its
+                // level as the floor would blind that channel for as long as it kept talking.
+                _floorDb[c] = Math.Min(_floorDb[c], db[c]);
                 _blocksAboveOpen[c] = 0;
             }
         }
@@ -372,6 +419,7 @@ public sealed class ChannelBank : IChannelizerSink
 
                 if (_blocksAboveOpen[c] >= 2
                     && !_overloaded
+                    && _overloadGuardBlocks == 0
                     && _active.Count < MaxOpenChannels
                     && !_active.ContainsKey(c - 1)
                     && !_active.ContainsKey(c + 1))
@@ -509,14 +557,16 @@ public sealed class ChannelBank : IChannelizerSink
             // a gate for a block or two, then hang time holds it open long enough to look like a real
             // (short) transmission. Real transmissions are above squelch for hundreds of blocks.
             var presentMs = tx.AboveBlocks * (BlockHopsMask + 1) * 1000.0 / _outputRate;
-            var tooShort = presentMs < 200;
+            var tooShort = presentMs < SignalScribe.Analysis.DiscardClassifier.MinPresentMs;
 
-            if (tooShort || (!known && !verdict.VoiceLike))
+            if (tx.OverloadArtifact || tooShort || (!known && !verdict.VoiceLike))
             {
                 // Click/spur, or non-voice on an unknown frequency: no channel is born. The clip is
                 // reported (not deleted) so the operator can review the gate's decision; the host
                 // purges these on a retention schedule.
-                var reason = tooShort ? $"only {presentMs:F0} ms of signal" : "not voice";
+                var reason = SignalScribe.Analysis.DiscardClassifier.Classify(
+                    tx.OverloadArtifact, presentMs, verdict.HeterodyneTone, verdict.SpeechBandRatio,
+                    verdict.SyllableRateHz, verdict.VoicedMs, verdict.ModulationDepth);
                 _logger.LogInformation("Discarded {Freq} Hz: {Reason} — {Verdict}", tx.FrequencyHz, reason, verdict);
 
                 if (_postDiscard is null)
@@ -529,7 +579,7 @@ public sealed class ChannelBank : IChannelizerSink
                     ingest.FrequencyHz, ingest.StartUtc, ingest.EndUtc, ingest.AudioPath,
                     ingest.PeakDbfs, reason, verdict.VoicedMs, Math.Round(verdict.SpeechBandRatio, 3),
                     Math.Round(verdict.ModulationDepth, 3), Math.Round(verdict.SyllableRateHz, 1),
-                    verdict.SustainedTone));
+                    verdict.SustainedTone, tx.CtcssHz, tx.DcsCode));
                 return;
             }
 
@@ -621,6 +671,15 @@ internal sealed class ActiveTransmission
     /// <summary>True if the front end overloaded at any point while this clip was recording — the audio will have a hole in it.</summary>
     public bool SawOverload { get; set; }
 
+    /// <summary>True if this gate opened as part of a front-end overload, so the clip is receiver artefact, not signal.</summary>
+    public bool OverloadArtifact { get; set; }
+
+    /// <summary>CTCSS tone read from under the audio, if any.</summary>
+    public double? CtcssHz => _demod.CtcssHz;
+
+    /// <summary>DCS code read from under the audio, if any.</summary>
+    public int? DcsCode => _demod.DcsCode;
+
     /// <summary>Squelch state, forwarded to the demodulator so the carrier-offset average ignores the tail.</summary>
     public bool SignalPresent
     {
@@ -669,6 +728,11 @@ internal sealed class ActiveTransmission
 
         foreach (var tone in _analyzer.ToneEvents)
         {
+            if (tone.ToneHz is < 300 or > 2700)
+            {
+                continue; // hum or leaked CTCSS: not a courtesy tone, and never an over boundary
+            }
+
             _markers.Add(tone.Sustained
                 ? new MarkerIngest(MarkerType.HeterodyneDouble, tone.OffsetMs, 0.7)
                 : new MarkerIngest(MarkerType.CourtesyTone, tone.OffsetMs, 0.6));
@@ -687,9 +751,11 @@ internal sealed class ActiveTransmission
             _relPath,
             Math.Round(PeakDbfs, 1),
             Math.Round(_demod.AverageOffsetHz, 1),
-            verdict.SustainedTone,
+            verdict.HeterodyneTone,
             _markers,
-            verdict.VoicedMs);
+            verdict.VoicedMs,
+            _demod.CtcssHz,
+            _demod.DcsCode);
     }
 
     private int ElapsedMs() => (int)(_lastHop * 1000 / _hopRate);

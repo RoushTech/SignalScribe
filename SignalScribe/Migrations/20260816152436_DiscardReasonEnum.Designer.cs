@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using SignalScribe.Data;
 
@@ -10,9 +11,11 @@ using SignalScribe.Data;
 namespace SignalScribe.Migrations
 {
     [DbContext(typeof(SignalScribeContext))]
-    partial class SignalScribeContextModelSnapshot : ModelSnapshot
+    [Migration("20260816152436_DiscardReasonEnum")]
+    partial class DiscardReasonEnum
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.3");
@@ -151,12 +154,6 @@ namespace SignalScribe.Migrations
                         .IsRequired()
                         .HasMaxLength(512)
                         .HasColumnType("TEXT");
-
-                    b.Property<double?>("CtcssHz")
-                        .HasColumnType("REAL");
-
-                    b.Property<int?>("DcsCode")
-                        .HasColumnType("INTEGER");
 
                     b.Property<DateTime>("EndUtc")
                         .HasColumnType("TEXT");
@@ -445,12 +442,6 @@ namespace SignalScribe.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<int>("ChannelId")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<double?>("CtcssHz")
-                        .HasColumnType("REAL");
-
-                    b.Property<int?>("DcsCode")
                         .HasColumnType("INTEGER");
 
                     b.Property<DateTime?>("EndUtc")

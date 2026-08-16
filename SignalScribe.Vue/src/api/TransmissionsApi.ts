@@ -19,6 +19,10 @@ export interface TransmissionDto {
   isDouble: boolean;
   audioPath: string;
   status: string;
+  ctcssHz: number | null;
+  dcsCode: number | null;
+  channelCtcssHz: number | null;
+  channelDcsCode: number | null;
   segments: SegmentDto[];
 }
 

@@ -31,6 +31,8 @@ public sealed class AudioAnalyzer
 
     private double _speechBandEnergy;
 
+    private readonly Biquad _envelopeHighPass = Biquad.HighPass(300, SampleRate);
+
     private double _totalEnergy;
 
     private int _framesTotal;
@@ -44,7 +46,7 @@ public sealed class AudioAnalyzer
 
     private long _samplesSeen;
 
-    public record ToneEvent(int OffsetMs, int DurationMs, bool Sustained);
+    public record ToneEvent(int OffsetMs, int DurationMs, bool Sustained, double ToneHz);
 
     public List<ToneEvent> ToneEvents { get; } = [];
 
@@ -72,7 +74,13 @@ public sealed class AudioAnalyzer
         foreach (var sample in pcm)
         {
             _samplesSeen++;
-            _envBlockSum += sample * sample;
+
+            // Envelope drives the syllable test, and syllables live in the voice band. Measured
+            // broadband, a steady tone under the speech raises the floor and flattens the variance
+            // that the test looks for — 147.180 carried a hum that dropped modulation depth to 0.10
+            // on audio a person was plainly talking over. Judge the rhythm of the voice band alone.
+            var voiceBand = _envelopeHighPass.Process(sample);
+            _envBlockSum += voiceBand * voiceBand;
             if (++_envBlockCount >= EnvelopeBlock)
             {
                 _envelopeRms.Add(MathF.Sqrt((float)(_envBlockSum / _envBlockCount)));
@@ -120,10 +128,27 @@ public sealed class AudioAnalyzer
             }
         }
 
-        _totalEnergy += total;
+        // A steady narrowband tone outside the voice band — a hum, a leaked CTCSS, a link tone — is
+        // interference sitting under the audio, not part of what we are judging. Left in the
+        // denominator it buries real speech: 13 s of a man talking on 147.180 scored 0.15 speech
+        // ratio and 864 ms voiced, because the tone outweighed him in every frame.
+        var peakHz = peakBin * binHz;
+        var interference = 0.0;
+        if (peakHz is < 300 or > 2700 && total > 1e-9)
+        {
+            var neighbourhood = BinEnergy(peakBin) + BinEnergy(peakBin - 1) + BinEnergy(peakBin + 1);
+            if (neighbourhood / total > 0.35)
+            {
+                interference = neighbourhood;
+            }
+        }
+
+        var judged = Math.Max(1e-12, total - interference);
+
+        _totalEnergy += judged;
         _speechBandEnergy += speech;
         _framesTotal++;
-        if (total > 1e-7 && speech / total > 0.55)
+        if (total > 1e-7 && speech / judged > 0.55)
         {
             // Voiced frame: speech-band dominated. Squelch-tail FM noise is broadband (~30% in-band)
             // and never counts — so the tail can't dilute the verdict (frame = 32 ms).
@@ -176,7 +201,7 @@ public sealed class AudioAnalyzer
             var endMs = (int)(_samplesSeen * 1000 / SampleRate);
             if (durationMs >= 60)
             {
-                ToneEvents.Add(new ToneEvent(Math.Max(0, endMs - durationMs), durationMs, durationMs >= 500));
+                ToneEvents.Add(new ToneEvent(Math.Max(0, endMs - durationMs), durationMs, durationMs >= 500, _toneBin * (double)SampleRate / FftSize));
             }
         }
 
@@ -226,13 +251,29 @@ public sealed class AudioAnalyzer
         }
 
         var sustainedTone = ToneEvents.Exists(t => t.Sustained);
+
+        // A sustained tone in the gaps between words is what a background tone sounds like, so it
+        // cannot be a blanket veto. Only a tone *in* the voice band can be mistaken for speech;
+        // one outside it is something the speech is sitting on top of.
+        var heterodyneTone = ToneEvents.Exists(t => t.Sustained && t.ToneHz is >= 300 and <= 2700);
+
         var voicedMs = _framesVoiced * FftSize * 1000 / SampleRate;
         var voiceLike = voicedMs >= 800
             && modDepth > 0.30
             && peakRateHz is >= 1.5 and <= 12
-            && !sustainedTone;
+            && !heterodyneTone;
 
-        return new AudioVerdict(voiceLike, speechRatio, voicedMs, modDepth, peakRateHz, sustainedTone);
+        return new AudioVerdict(voiceLike, speechRatio, voicedMs, modDepth, peakRateHz, sustainedTone, heterodyneTone);
+    }
+
+    private double BinEnergy(int bin)
+    {
+        if (bin < 1 || bin >= FftSize / 2)
+        {
+            return 0;
+        }
+
+        return _fftFrame[2 * bin] * _fftFrame[2 * bin] + _fftFrame[2 * bin + 1] * _fftFrame[2 * bin + 1];
     }
 
     private static float[] BuildHann(int n)
@@ -247,4 +288,17 @@ public sealed class AudioAnalyzer
     }
 }
 
-public record AudioVerdict(bool VoiceLike, double SpeechBandRatio, int VoicedMs, double ModulationDepth, double SyllableRateHz, bool SustainedTone);
+/// <param name="SustainedTone">Any steady tone at all, including hum below the voice band.</param>
+/// <param name="HeterodyneTone">
+/// A steady tone *inside* 300-2700 Hz. Two carriers on one channel beat into an audible whistle
+/// there, which is what a double sounds like; hum, leaked CTCSS and buzz sit below it and are
+/// something the voice is riding on rather than a second station.
+/// </param>
+public record AudioVerdict(
+    bool VoiceLike,
+    double SpeechBandRatio,
+    int VoicedMs,
+    double ModulationDepth,
+    double SyllableRateHz,
+    bool SustainedTone,
+    bool HeterodyneTone);

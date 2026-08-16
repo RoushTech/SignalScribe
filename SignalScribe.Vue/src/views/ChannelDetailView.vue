@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import { channelTone } from "@/lib/squelchTone";
 import { ChannelsApi, type ChannelDto, type ChannelUpsertRequest } from "@/api/ChannelsApi";
 import { NetsApi, NetScheduleSource, type NetDto, type NetUpsertRequest } from "@/api/NetsApi";
 import { SessionsApi, type SessionDto } from "@/api/SessionsApi";
@@ -88,7 +89,16 @@ onMounted(refresh);
         </v-card-title>
         <v-card-subtitle>
           {{ channel.description ?? "No description" }}
-          <span v-if="channel.ctcssToneHz"> · tone {{ channel.ctcssToneHz }} Hz</span>
+          <span v-if="channelTone(channel)">
+            ·
+            <v-tooltip :text="channelTone(channel)!.detail" location="bottom" max-width="340">
+              <template #activator="{ props }">
+                <span v-bind="props" style="cursor: help; text-decoration: underline dotted">
+                  {{ channelTone(channel)!.measured ? "heard" : "tone" }} {{ channelTone(channel)!.label }}
+                </span>
+              </template>
+            </v-tooltip>
+          </span>
           <span v-if="channel.measuredCtcssToneHz"> (measured {{ channel.measuredCtcssToneHz }} Hz)</span>
         </v-card-subtitle>
         <template #append>

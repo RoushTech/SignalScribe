@@ -1,3 +1,4 @@
+import { DiscardReason } from "@/lib/discardReason";
 import http from "@/api/axios";
 
 export interface DiscardDto {
@@ -5,17 +6,19 @@ export interface DiscardDto {
   frequencyHz: number;
   startUtc: string;
   durationMs: number;
-  reason: string;
+  reason: DiscardReason;
   peakDbfs: number;
   voicedMs: number;
   speechBandRatio: number;
   modulationDepth: number;
   syllableRateHz: number;
   sustainedTone: boolean;
+  ctcssHz: number | null;
+  dcsCode: number | null;
 }
 
 export interface ReasonCountDto {
-  reason: string;
+  reason: DiscardReason;
   count: number;
 }
 

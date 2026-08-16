@@ -18,6 +18,10 @@ public static class TransmissionMapper
         t.IsDouble,
         t.AudioPath,
         Status(t),
+        t.CtcssHz,
+        t.DcsCode,
+        t.Channel.CtcssToneHz ?? t.Channel.LearnedState?.CtcssToneHz,
+        t.Channel.LearnedState?.DcsCode,
         t.Segments
             .OrderBy(s => s.StartMs)
             .Select(s => new SegmentDto(s.Id, s.StartMs, s.EndMs, s.Transcript, s.Callsign, s.SpeakerId))
