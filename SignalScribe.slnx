@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="SignalScribe.Api/SignalScribe.Api.csproj" />
+  <Project Path="SignalScribe.Capture/SignalScribe.Capture.csproj" />
+  <Project Path="SignalScribe.Workers/SignalScribe.Workers.csproj" />
+  <Project Path="SignalScribe.Tests/SignalScribe.Tests.csproj" />
+  <Project Path="SignalScribe/SignalScribe.csproj" />
+</Solution>

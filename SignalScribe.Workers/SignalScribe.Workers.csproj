@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <!-- Native inference stays in this process so a segfault restarts `workers`, never the api. -->
+  <ItemGroup>
+    <PackageReference Include="Concentus" Version="2.2.2" />
+    <PackageReference Include="Concentus.Oggfile" Version="1.0.5" />
+    <PackageReference Include="LLamaSharp" Version="0.27.0" />
+    <PackageReference Include="LLamaSharp.Backend.Cpu" Version="0.27.0" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.3" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.3" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.3" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.29.0" />
+    <PackageReference Include="Whisper.net" Version="1.9.1" />
+    <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
+    <PackageReference Include="Whisper.net.Runtime.NoAvx" Version="1.9.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SignalScribe\SignalScribe.csproj" />
+  </ItemGroup>
+
+  <!-- Whisper.net.Runtime.NoAvx 1.9.1 packaging bug: its libs reference versioned SONAMEs
+       (libggml-whisper.so.0) but the package ships unversioned files. Symlink them into place. -->
+  <Target Name="FixNoAvxSonames" AfterTargets="Build" Condition="'$(OS)' == 'Unix'">
+    <Exec Command="for f in libggml-whisper libggml-base-whisper libggml-cpu-whisper; do [ -f '$(OutDir)runtimes/noavx/linux-x64/'$f.so ] &amp;&amp; ln -sf $f.so '$(OutDir)runtimes/noavx/linux-x64/'$f.so.0; done; true" />
+  </Target>
+
+  <Target Name="FixNoAvxSonamesPublish" AfterTargets="Publish" Condition="'$(OS)' == 'Unix'">
+    <Exec Command="for f in libggml-whisper libggml-base-whisper libggml-cpu-whisper; do [ -f '$(PublishDir)runtimes/noavx/linux-x64/'$f.so ] &amp;&amp; ln -sf $f.so '$(PublishDir)runtimes/noavx/linux-x64/'$f.so.0; done; true" />
+  </Target>
+
+</Project>

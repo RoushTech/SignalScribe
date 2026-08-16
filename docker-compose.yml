@@ -1,0 +1,60 @@
+services:
+  api:
+    build: .
+    command: ["dotnet", "/app/api/SignalScribe.Api.dll"]
+    working_dir: /app/api
+    restart: unless-stopped
+    ports:
+      - "5020:5020"
+    environment:
+      # Unprefixed env vars override appsettings.json (which pins localhost:5020 for dev).
+      Urls: http://0.0.0.0:5020
+      ConnectionStrings__SignalScribe: "Data Source=/data/signalscribe.db"
+      AudioDirectory: /audio
+      ModelsDirectory: /models
+    volumes:
+      # Only api mounts the database volume — single writer, filesystem-enforced.
+      - ./data/data:/data
+      - ./data/audio:/audio:ro
+      # Read-only: the settings dropdowns list the models that are actually installed.
+      - ./models:/models:ro
+
+  workers:
+    build: .
+    command: ["dotnet", "/app/workers/SignalScribe.Workers.dll"]
+    working_dir: /app/workers
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      Host__BaseUrl: http://api:5020
+      Workers__AudioDirectory: /audio
+      Workers__ModelsDirectory: /models
+    volumes:
+      - ./data/audio:/audio:ro
+      - ./models:/models
+    # Native inference gets a fence: a llama.cpp segfault restarts this container only, and
+    # cpu_shares (relative weight, default 1024) keeps the api responsive under Whisper/LLM
+    # crunch without a hard core cap that breaks on smaller machines. Add `cpus: N` per-host
+    # if you want a hard ceiling.
+    mem_limit: 10g
+    cpu_shares: 512
+
+  capture:
+    build: .
+    command: ["/app/start-capture.sh"]
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      Host__BaseUrl: http://api:5020
+      Capture__AudioDirectory: /audio
+      Capture__SpoolDirectory: /spool
+    volumes:
+      - ./data/audio:/audio
+      - ./data/spool:/spool
+      # USB passthrough for the RSP. The bind mount + cgroup rule (189 = USB major) survives
+      # unplug/replug re-enumeration, which a plain `devices:` mapping does not.
+      - /dev/bus/usb:/dev/bus/usb
+    device_cgroup_rules:
+      - "c 189:* rwm"

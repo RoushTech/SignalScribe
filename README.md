@@ -33,7 +33,7 @@ RSP1 ──IQ (~6 MSPS)──► Capture Daemon (C#)
 | Component | Minimum | Recommended | Notes |
 |---|---|---|---|
 | SDR | SDRPlay RSP1 | RSP1 + 2m bandpass filter | RSP1 has minimal preselection; FM broadcast/pagers can overload it. Run ~6 MSPS (2m band is only 4 MHz wide). |
-| CPU | 6 cores with AVX2 | 8+ cores (Zen 3+/12th-gen Intel+) | LLM inference is **memory-bandwidth bound** — dual-channel RAM matters more than core count; >8 threads gives diminishing returns. |
+| CPU | 6 cores with AVX2 | 8+ cores (Zen 3+/12th-gen Intel+) | LLM inference is **memory-bandwidth bound** — dual-channel RAM matters more than core count; >8 threads gives diminishing returns. CPUs without AVX (e.g. QEMU default vCPUs — use `-cpu host`!) work via bundled no-AVX runtimes but inference is several times slower. |
 | RAM | 16 GB (tight) | 32 GB | See per-model budget below. |
 | Disk | 50 GB | 100 GB+ SSD | Audio recorded directly as 16 kHz Opus-in-OGG, 32 kbps VBR voice mode (~14 MB per hour of recorded audio). Optional raw WAV/IQ capture behind a debug flag for DSP development. |
 | USB | USB 2.0 port | — | 6 MSPS fits USB 2.0. |
@@ -62,7 +62,7 @@ Everything above runs concurrently on one 8-core / 32 GB machine. All inference 
 | Speaker ID | ONNX Runtime + ECAPA-TDNN embeddings, clustered per session, labeled via extracted callsigns |
 | Summaries | [LLamaSharp](https://github.com/SciSharp/LLamaSharp) (llama.cpp bindings) |
 | Storage | SQLite (WAL mode) via **EF Core**; FTS5 transcript index (see CLAUDE.md for the pattern) |
-| API / UI | ASP.NET Core minimal API + Vue 3 |
+| API / UI | ASP.NET Core (controllers, `api/v0/`) + Vue 3 + Vuetify |
 
 ## Legal note
 
