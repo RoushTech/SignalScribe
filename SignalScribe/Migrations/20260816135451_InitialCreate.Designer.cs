@@ -11,8 +11,8 @@ using SignalScribe.Data;
 namespace SignalScribe.Migrations
 {
     [DbContext(typeof(SignalScribeContext))]
-    [Migration("20260816041317_TransmissionTranscribedByModel")]
-    partial class TransmissionTranscribedByModel
+    [Migration("20260816135451_InitialCreate")]
+    partial class InitialCreate
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -95,6 +95,10 @@ namespace SignalScribe.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("AutoDisabledReason")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Callsign")
                         .HasMaxLength(16)
                         .HasColumnType("TEXT");
@@ -115,6 +119,9 @@ namespace SignalScribe.Migrations
                     b.Property<string>("Label")
                         .IsRequired()
                         .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("LastSpeechUtc")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("LearnedStateJson")
@@ -494,10 +501,16 @@ namespace SignalScribe.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("TEXT");
 
+                    b.Property<int>("SummaryThreads")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("TranscriptionPrompt")
                         .IsRequired()
                         .HasMaxLength(4096)
                         .HasColumnType("TEXT");
+
+                    b.Property<int>("TranscriptionThreads")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("WhisperModel")
                         .IsRequired()
@@ -516,7 +529,9 @@ namespace SignalScribe.Migrations
                             MaxJobsPerClaim = 4,
                             Paused = false,
                             SummaryModel = "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+                            SummaryThreads = 0,
                             TranscriptionPrompt = "Amateur radio net. QSL, QRZ, seventy-three, net control, check-in, kerchunk, repeater, simplex, CQ, destinated.",
+                            TranscriptionThreads = 0,
                             WhisperModel = "ggml-small.en-q5_1.bin"
                         });
                 });
