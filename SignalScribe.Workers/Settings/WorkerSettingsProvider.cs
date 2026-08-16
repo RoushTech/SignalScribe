@@ -9,7 +9,7 @@ public sealed class WorkerSettingsProvider(IHttpClientFactory httpFactory, ILogg
     public WorkerSettingsDto Current { get; private set; } = new(
         WhisperModel: "ggml-small.en-q5_1.bin",
         TranscriptionPrompt: string.Empty,
-        SummaryModel: "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+        SummaryModel: "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf",
         MaxJobsPerClaim: 4,
         TranscriptionThreads: 0,
         SummaryThreads: 0,

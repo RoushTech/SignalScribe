@@ -44,13 +44,17 @@ RSP1 ──IQ (~6 MSPS)──► Capture Daemon (C#)
 | Workload | Model | RAM | CPU cost | Latency expectation |
 |---|---|---|---|---|
 | Channelizer + demod | — (custom PFB) | < 1 GB | 1–2 cores, continuous | Real-time |
-| Transcription | Whisper `small.en` (q5) | ~1 GB | Bursty | Faster than real-time on 8 cores |
+| Transcription | Whisper `small.en` (q5) | ~1 GB | Bursty | Faster than real-time on 8 cores; **1.12× real-time on 3 threads of a 4-core box** (measured) |
 | Transcription (higher accuracy) | Whisper `medium.en` (q5) | ~2.5 GB | Bursty | ~Real-time; backlog drains overnight |
 | Speaker embeddings | ECAPA-TDNN (ONNX) | ~100 MB | Negligible | Per-clip, milliseconds |
-| Net summaries | Qwen 2.5 / Llama 3.x **8B Q4_K_M** | ~5 GB model, 6–8 GB process | Batch, after net closes | 5–15 tok/s generation → **2–4 min per net summary** |
-| Net summaries (low-power box) | Qwen 2.5 **3B Q4** | ~2.5 GB | Batch | Faster; quality sufficient since facts come from the deterministic layer |
+| Net summaries | Qwen 2.5 **1.5B Q4_K_M** (default) | ~1 GB | Batch, after net closes | Under a minute per summary on four cores |
+| Net summaries (better prose) | Qwen 2.5 / Llama 3.x **7–8B Q4_K_M** | ~5 GB model, 6–8 GB process | Batch | 5–15 tok/s → **2–4 min per net summary**; wants 8 cores |
 
-Everything above runs concurrently on one 8-core / 32 GB machine. All inference is local; nothing requires network access after model download.
+Everything above runs concurrently on one 8-core / 32 GB machine. Four cores is enough for the
+defaults, but leaves no headroom: give inference `cores − 1` threads (Settings → CPU threads) so the
+capture daemon, which consumes a 6.4 MSPS stream in real time, is never descheduled. Summary quality
+holds up at 1.5B because the facts come from the deterministic layer — the model only phrases them.
+All inference is local; nothing requires network access after model download.
 
 ## Software stack
 

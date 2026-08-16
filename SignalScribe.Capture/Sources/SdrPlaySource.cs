@@ -73,6 +73,15 @@ public sealed class SdrPlaySource : ISampleSource
 
     public long AdcOverloads => Interlocked.Read(ref _adcOverloads);
 
+    /// <summary>
+    /// True between an overload being detected and corrected. While the front end is overloaded the
+    /// ADC is clipping and every channel in the filterbank carries compression products rather than
+    /// signal — the RF is not what the antenna is receiving, so nothing measured is worth acting on.
+    /// </summary>
+    public bool Overloaded => Volatile.Read(ref _overloaded) != 0;
+
+    private int _overloaded;
+
     public unsafe void Start()
     {
         Check(Open(), "Open");
@@ -226,7 +235,20 @@ public sealed class SdrPlaySource : ISampleSource
         switch (eventId)
         {
             case SdrEvent.PowerOverloadChange:
-                Interlocked.Increment(ref _adcOverloads);
+                // powerOverloadChangeType is the first field of the event-params union.
+                var change = (OverloadChange)System.Runtime.InteropServices.Marshal.ReadInt32(eventParams);
+                if (change == OverloadChange.Detected)
+                {
+                    Interlocked.Increment(ref _adcOverloads);
+                    Volatile.Write(ref _overloaded, 1);
+                    _logger.LogWarning("ADC overload — holding squelch shut until it clears");
+                }
+                else
+                {
+                    Volatile.Write(ref _overloaded, 0);
+                    _logger.LogInformation("ADC overload cleared");
+                }
+
                 // Mandatory ack, or the service keeps re-raising the event.
                 Update(_device.Dev, tuner, ReasonForUpdate.Ctrl_OverloadMsgAck, 0);
                 break;

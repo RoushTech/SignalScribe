@@ -49,7 +49,7 @@ public class WorkerSettings : IEntityTypeConfiguration<WorkerSettings>
             WhisperModel = "ggml-small.en-q5_1.bin",
             TranscriptionPrompt =
                 "Amateur radio net. QSL, QRZ, seventy-three, net control, check-in, kerchunk, repeater, simplex, CQ, destinated.",
-            SummaryModel = "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+            SummaryModel = "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf",
             MaxJobsPerClaim = 4,
             TranscriptionThreads = 0,
             SummaryThreads = 0,

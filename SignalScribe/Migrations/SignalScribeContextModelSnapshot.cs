@@ -525,7 +525,7 @@ namespace SignalScribe.Migrations
                             DiscardRetentionHours = 24,
                             MaxJobsPerClaim = 4,
                             Paused = false,
-                            SummaryModel = "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+                            SummaryModel = "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf",
                             SummaryThreads = 0,
                             TranscriptionPrompt = "Amateur radio net. QSL, QRZ, seventy-three, net control, check-in, kerchunk, repeater, simplex, CQ, destinated.",
                             TranscriptionThreads = 0,

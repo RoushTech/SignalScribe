@@ -23,9 +23,13 @@ fetch "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en-
 # large-v3-turbo: near large-v3 accuracy at a fraction of the CPU cost — the sweet spot here.
 fetch "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin" "ggml-large-v3-turbo-q5_0.bin"
 
-# Qwen 2.5 7B Instruct Q4_K_M (net summaries) — ~4.7 GB. Swap for the 3B on low-power boxes.
-fetch "https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf" "Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+# Qwen 2.5 1.5B Instruct Q4_K_M (net summaries) — ~0.9 GB, and the seeded default. Summaries are
+# written from facts the database already computed, so the model only has to phrase them; on a
+# four-core box a 7B spends minutes per summary competing with realtime capture, and this does not.
+fetch "https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf" "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf"
+# Larger alternatives — better prose, much slower on CPU. Uncomment, then pick it in Settings.
 # fetch "https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/resolve/main/Qwen2.5-3B-Instruct-Q4_K_M.gguf" "Qwen2.5-3B-Instruct-Q4_K_M.gguf"
+# fetch "https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf" "Qwen2.5-7B-Instruct-Q4_K_M.gguf"
 
 # TODO(milestone 4): ECAPA-TDNN speaker-embedding model. The SpeechBrain release needs a one-time
 # ONNX export (torch.onnx.export of speechbrain/spkrec-ecapa-voxceleb) — script that here so the

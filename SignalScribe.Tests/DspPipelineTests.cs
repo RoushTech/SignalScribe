@@ -387,6 +387,108 @@ public class DspPipelineTests
         }
     }
 
+    /// <summary>
+    /// A transmitter close enough to overload the front end (your own APRS beacon) lifts the whole
+    /// band at once: on air that opened ten gates together and they stayed open long after the
+    /// desense passed. While the ADC is clipping nothing in the filterbank is signal, and the
+    /// hardware tells us so — so hold every gate shut rather than trying to infer it from levels.
+    /// </summary>
+    [Fact]
+    public void NothingOpensWhileTheFrontEndIsOverloaded()
+    {
+        var audioRoot = Path.Combine(Path.GetTempPath(), $"ss-ovl-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(audioRoot);
+        try
+        {
+            var channelizer = new PolyphaseChannelizer(Fs, Spacing);
+            var posted = new List<TransmissionIngest>();
+            var discarded = new List<DiscardIngest>();
+            var bank = new ChannelBank(
+                channelizer.ChannelCount, channelizer.OutputSampleRate, CenterHz,
+                bin => channelizer.BinFrequencyHz(bin, CenterHz),
+                openDb: 8, closeDb: 5, hangMs: 300,
+                audioRoot, DateTime.UtcNow,
+                _ => false, posted.Add, NullLogger.Instance, postDiscard: discarded.Add);
+            var sink = new ForwardSink(bank);
+
+            channelizer.Process(MakeNoise(0.4), sink);          // settle the floors
+
+            // Only two channels lift, which is under the simultaneous-open threshold — so this
+            // isolates the overload gate rather than re-testing the level-event heuristic.
+            bank.Overloaded = true;
+            channelizer.Process(MakeBandBurst(2, 0.5), sink);    // the beacon keys up
+            bank.Overloaded = false;
+
+            channelizer.Process(MakeNoise(0.8), sink);           // and the band comes back
+            bank.CloseAll(long.MaxValue / 2);
+
+            Assert.Empty(posted);
+            Assert.Empty(discarded);
+            Assert.Equal(0, bank.OpenGateCount);
+
+            // The same burst without the overload flag does open gates — otherwise the assertions
+            // above would hold for the wrong reason.
+            var control = new List<TransmissionIngest>();
+            var controlDiscards = new List<DiscardIngest>();
+            var chan2 = new PolyphaseChannelizer(Fs, Spacing);
+            var unguarded = new ChannelBank(
+                chan2.ChannelCount, chan2.OutputSampleRate, CenterHz,
+                bin => chan2.BinFrequencyHz(bin, CenterHz),
+                openDb: 8, closeDb: 5, hangMs: 300,
+                audioRoot, DateTime.UtcNow,
+                _ => false, control.Add, NullLogger.Instance, postDiscard: controlDiscards.Add);
+            var sink2 = new ForwardSink(unguarded);
+            chan2.Process(MakeNoise(0.4), sink2);
+            chan2.Process(MakeBandBurst(2, 0.5), sink2);
+            chan2.Process(MakeNoise(0.8), sink2);
+            unguarded.CloseAll(long.MaxValue / 2);
+
+            Assert.NotEmpty(control.Concat<object>(controlDiscards));
+        }
+        finally
+        {
+            Directory.Delete(audioRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// The floors are re-referenced on the way out of overload, so a real signal arriving right
+    /// afterwards must still open a gate — recovery cannot cost us the next transmission.
+    /// </summary>
+    [Fact]
+    public void RealSignalOpensImmediatelyAfterOverloadClears()
+    {
+        var audioRoot = Path.Combine(Path.GetTempPath(), $"ss-ovl2-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(audioRoot);
+        try
+        {
+            var channelizer = new PolyphaseChannelizer(Fs, Spacing);
+            var posted = new List<TransmissionIngest>();
+            var bank = new ChannelBank(
+                channelizer.ChannelCount, channelizer.OutputSampleRate, CenterHz,
+                bin => channelizer.BinFrequencyHz(bin, CenterHz),
+                openDb: 8, closeDb: 5, hangMs: 300,
+                audioRoot, DateTime.UtcNow,
+                _ => true, posted.Add, NullLogger.Instance);
+            var sink = new ForwardSink(bank);
+
+            channelizer.Process(MakeNoise(0.4), sink);
+            bank.Overloaded = true;
+            channelizer.Process(MakeBandBurst(12, 0.5), sink);
+            bank.Overloaded = false;
+            channelizer.Process(MakeNoise(0.3), sink);
+            channelizer.Process(MakeFmBurst(75_000, 1.5), sink);
+            channelizer.Process(MakeNoise(0.5), sink);
+            bank.CloseAll(long.MaxValue / 2);
+
+            Assert.NotEmpty(posted);
+        }
+        finally
+        {
+            Directory.Delete(audioRoot, recursive: true);
+        }
+    }
+
     [Fact]
     public void SteadyStateChannelizationAllocatesAlmostNothing()
     {

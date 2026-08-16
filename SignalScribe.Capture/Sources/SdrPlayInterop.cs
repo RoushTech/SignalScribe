@@ -60,6 +60,16 @@ internal static unsafe class SdrPlayInterop
         Ctrl_OverloadMsgAck = 0x04000000,
     }
 
+    /// <summary>
+    /// sdrplay_api_PowerOverloadCbEventIdT — the first field of the event-params union, so it can be
+    /// read straight off the pointer. Distinguishes the front end going into overload from coming out.
+    /// </summary>
+    public enum OverloadChange
+    {
+        Detected = 0,
+        Corrected = 1,
+    }
+
     public enum SdrEvent
     {
         GainChange = 0,

@@ -293,7 +293,7 @@ namespace SignalScribe.Migrations
             migrationBuilder.InsertData(
                 table: "WorkerSettings",
                 columns: new[] { "Id", "DiscardRetentionHours", "MaxJobsPerClaim", "Paused", "SummaryModel", "SummaryThreads", "TranscriptionPrompt", "TranscriptionThreads", "WhisperModel" },
-                values: new object[] { 1, 24, 4, false, "Qwen2.5-7B-Instruct-Q4_K_M.gguf", 0, "Amateur radio net. QSL, QRZ, seventy-three, net control, check-in, kerchunk, repeater, simplex, CQ, destinated.", 0, "ggml-small.en-q5_1.bin" });
+                values: new object[] { 1, 24, 4, false, "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf", 0, "Amateur radio net. QSL, QRZ, seventy-three, net control, check-in, kerchunk, repeater, simplex, CQ, destinated.", 0, "ggml-small.en-q5_1.bin" });
 
             migrationBuilder.CreateIndex(
                 name: "IX_Channels_FrequencyHz",

@@ -11,8 +11,15 @@ namespace SignalScribe.Capture.Dsp;
 /// </summary>
 public static class ChannelGrid
 {
-    /// <summary>US/IARU channel step. Multiples of 2.5 kHz cover both 5 kHz and 12.5 kHz channel plans.</summary>
-    public const long StepHz = 2_500;
+    /// <summary>
+    /// US/IARU channel step. Every allocation on 2m sits on a multiple of 5 kHz — repeater pairs on
+    /// 15/20 kHz spacing, simplex on 20 kHz, APRS on 144.390 — so 5 kHz is the real grid. A 2.5 kHz
+    /// step also accepts the odd 12.5 kHz-plan frequency, but the extra grid points it allows are
+    /// precisely the filterbank's own bin centres, which is where an off-frequency transmitter gets
+    /// wrongly parked: a digipeater measured 1.75 kHz low reported as 144.3875 (a bin centre) rather
+    /// than 144.390. Snapping on 5 kHz absorbs transmitter error up to half a channel instead.
+    /// </summary>
+    public const long StepHz = 5_000;
 
     /// <summary>Corrections beyond half a bin mean the offset measurement is untrustworthy — keep the bin.</summary>
     public const double MaxCorrectionHz = 6_250;
@@ -21,7 +28,10 @@ public static class ChannelGrid
     {
         if (double.IsNaN(measuredOffsetHz) || Math.Abs(measuredOffsetHz) > MaxCorrectionHz)
         {
-            return SnapToStep(binFrequencyHz);
+            // No trustworthy offset: report the bin untouched. Snapping it anyway would be a coin
+            // flip — a bin centre falls exactly halfway between two 5 kHz channels — and inventing
+            // a precise-looking frequency we did not measure is worse than an obvious bin centre.
+            return binFrequencyHz;
         }
 
         return SnapToStep(binFrequencyHz + (long)Math.Round(measuredOffsetHz));

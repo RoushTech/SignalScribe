@@ -99,6 +99,11 @@ public sealed class CaptureService(
             s?.MonitorHighHz ?? 148_000_000,
             discard => _ = hostClient.PostDiscardAsync(discard, CancellationToken.None));
 
+        // Front-end overload is ground truth from the hardware: while the ADC is clipping, every bin
+        // carries compression products rather than signal. Feeding it to the bank holds every gate
+        // shut for the duration instead of recording a band-wide burst of nothing.
+        var overloadSource = source as SdrPlaySource;
+
         var buffer = new float[65536];
         var lastStatus = DateTime.UtcNow;
         var lastEnumerate = DateTime.UtcNow;
@@ -129,6 +134,11 @@ public sealed class CaptureService(
                     // Stalled sample counter is the sdrplay-service-wedged signal: tear down, re-init.
                     logger.LogWarning("Sample stream stalled — tearing down and re-initializing");
                     return;
+                }
+
+                if (overloadSource is not null)
+                {
+                    bank.Overloaded = overloadSource.Overloaded;
                 }
 
                 var span = buffer.AsSpan(0, n);

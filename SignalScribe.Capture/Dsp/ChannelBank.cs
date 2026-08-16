@@ -101,6 +101,30 @@ public sealed class ChannelBank : IChannelizerSink
 
     private bool _floorsSeeded;
 
+    private bool _overloaded;
+
+    private bool _clearingOverload;
+
+    /// <summary>
+    /// Front-end overload state, pushed in from the sample source. While set, the ADC is clipping and
+    /// every bin carries compression products instead of signal, so no gate may open on what is
+    /// measured — this is the ground truth the simultaneous-open heuristic can only guess at, and it
+    /// is what a nearby transmitter (your own APRS beacon) trips.
+    /// </summary>
+    public bool Overloaded
+    {
+        get => _overloaded;
+        set
+        {
+            if (_overloaded && !value)
+            {
+                _clearingOverload = true; // re-reference every floor once the real noise floor is back
+            }
+
+            _overloaded = value;
+        }
+    }
+
     /// <summary>Blocks to let the filterbank history fill and floors settle before any gate may open.</summary>
     private const int WarmupBlocks = 24;
 
@@ -233,6 +257,26 @@ public sealed class ChannelBank : IChannelizerSink
             db[c] -= _globalDb;
         }
 
+        // Coming out of overload the levels in front of us are real again, but every floor was
+        // learned against clipped garbage (and every open gate froze its floor at a level that no
+        // longer exists). Re-reference them all in one block: without this the channels that opened
+        // during the overload sit above a stale floor and stay open long after the desense passes,
+        // which is exactly the "they never drop" behaviour on air.
+        if (_clearingOverload)
+        {
+            _clearingOverload = false;
+            for (var c = 0; c < _channelCount; c++)
+            {
+                if (_active.ContainsKey(c))
+                {
+                    continue; // a transmission already in progress keeps its reference
+                }
+
+                _floorDb[c] = db[c];
+                _blocksAboveOpen[c] = 0;
+            }
+        }
+
         // First block seeds the floors — a fixed init would open every gate (or none).
         if (!_floorsSeeded)
         {
@@ -273,6 +317,11 @@ public sealed class ChannelBank : IChannelizerSink
             if (_active.TryGetValue(c, out var tx))
             {
                 tx.PeakDbfs = Math.Max(tx.PeakDbfs, db[c] + _globalDb); // report absolute level
+                if (_overloaded)
+                {
+                    tx.SawOverload = true;
+                }
+
                 var present = db[c] >= _floorDb[c] + _closeDb;
                 tx.SignalPresent = present;
                 if (!present)
@@ -322,6 +371,7 @@ public sealed class ChannelBank : IChannelizerSink
                 }
 
                 if (_blocksAboveOpen[c] >= 2
+                    && !_overloaded
                     && _active.Count < MaxOpenChannels
                     && !_active.ContainsKey(c - 1)
                     && !_active.ContainsKey(c + 1))
@@ -567,6 +617,9 @@ internal sealed class ActiveTransmission
 
     /// <summary>Blocks the channel was actually above squelch — distinguishes a transmission from a splatter transient held open by hang time.</summary>
     public int AboveBlocks { get; set; }
+
+    /// <summary>True if the front end overloaded at any point while this clip was recording — the audio will have a hole in it.</summary>
+    public bool SawOverload { get; set; }
 
     /// <summary>Squelch state, forwarded to the demodulator so the carrier-offset average ignores the tail.</summary>
     public bool SignalPresent

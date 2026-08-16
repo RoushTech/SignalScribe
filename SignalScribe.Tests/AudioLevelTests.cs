@@ -111,8 +111,26 @@ public class ChannelGridTests
     [InlineData(147_125_000, 60, 147_125_000)]       // already on grid — unchanged
     [InlineData(146_800_000, -120, 146_800_000)]
     [InlineData(145_000_000, -5_000, 144_995_000)]   // negative offset
+    [InlineData(144_387_500, 2_357, 144_390_000)]    // APRS, transmitter on frequency
+    [InlineData(147_250_000, 4_924, 147_255_000)]    // measured on air: 147.255 repeater
+    [InlineData(145_475_000, -5_157, 145_470_000)]   // measured on air: 145.470
+    [InlineData(146_937_500, 2_434, 146_940_000)]    // measured on air: 146.940
+    [InlineData(147_362_500, -2_752, 147_360_000)]   // measured on air: 147.360
     public void SnapsToRealChannel(long binHz, double offsetHz, long expected) =>
         Assert.Equal(expected, ChannelGrid.Snap(binHz, offsetHz));
+
+    /// <summary>
+    /// The digipeater on 144.390 transmits ~1.75 kHz low, so it lands nearer the 144.3875 filterbank
+    /// bin centre than the channel it is nominally on. A 2.5 kHz grid parks it on the bin — which is
+    /// not a channel anyone transmits on — while a 5 kHz grid puts it where an operator expects.
+    /// </summary>
+    [Fact]
+    public void AbsorbsAnOffFrequencyTransmitterInsteadOfParkingItOnABinCentre()
+    {
+        Assert.Equal(144_390_000, ChannelGrid.Snap(144_387_500, 610));    // measured on air
+        Assert.Equal(144_390_000, ChannelGrid.Snap(144_387_500, 911));    // the widest packet seen
+        Assert.Equal(144_390_000, ChannelGrid.Snap(144_387_500, 284));    // the narrowest
+    }
 
     [Fact]
     public void IgnoresImplausibleOffsets()
