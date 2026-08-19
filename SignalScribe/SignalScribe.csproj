@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.3" />
+    <PackageReference Include="RoushTech.APRSsharp.AprsParser" Version="0.5.1-rc.2" />
     <!-- Pin past the vulnerable 2.1.11 that EF 10.0.3 pulls transitively (GHSA-2m69-gcr7-jv3q) -->
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.13" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.3">

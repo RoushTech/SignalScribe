@@ -4,8 +4,10 @@ import { useRouter } from "vue-router";
 import { ChannelsApi, ChannelType, type ChannelDto, type ChannelUpsertRequest } from "@/api/ChannelsApi";
 import { useChannelsStore } from "@/stores/channels";
 import { formatFrequency, formatLocal } from "@/lib/time";
-import { channelTone } from "@/lib/squelchTone";
+import { channelTone, formatNoiseFloor } from "@/lib/squelchTone";
+import { channelModeChip } from "@/lib/detectedMode";
 import ChannelEditDialog from "@/components/ChannelEditDialog.vue";
+import ModeChip from "@/components/ModeChip.vue";
 
 const router = useRouter();
 const store = useChannelsStore();
@@ -15,6 +17,10 @@ const error = ref<string | null>(null);
 
 function typeName(type: ChannelType): string {
   return { [ChannelType.Unknown]: "Unknown", [ChannelType.Simplex]: "Simplex", [ChannelType.RepeaterOutput]: "Repeater" }[type];
+}
+
+function channelMode(c: ChannelDto) {
+  return channelModeChip(c.modulation, c.measuredMode);
 }
 
 function openCreate() {
@@ -59,8 +65,10 @@ onMounted(() => store.refresh());
             <th>Frequency</th>
             <th>Label</th>
             <th>Type</th>
+            <th>Mode</th>
             <th>Callsign</th>
             <th>Tone</th>
+            <th>Noise floor</th>
             <th>Recordings</th>
             <th>Last heard</th>
             <th />
@@ -87,6 +95,10 @@ onMounted(() => store.refresh());
               <v-chip v-else-if="!c.enabled" size="x-small" class="ml-1">disabled</v-chip>
             </td>
             <td>{{ typeName(c.type) }}</td>
+            <td>
+              <ModeChip :chip="channelMode(c)" />
+              <span v-if="!channelMode(c)">—</span>
+            </td>
             <td>{{ c.callsign ?? "—" }}</td>
             <td>
               <v-tooltip v-if="channelTone(c)" :text="channelTone(c)!.detail" location="bottom" max-width="340">
@@ -103,6 +115,19 @@ onMounted(() => store.refresh());
                 </template>
               </v-tooltip>
               <span v-else>—</span>
+            </td>
+            <td class="text-no-wrap">
+              {{ formatNoiseFloor(c.noiseFloorDbfs) }}
+              <v-tooltip
+                v-if="!c.adaptiveSquelch"
+                text="Pinned by you — capture is not re-learning this channel's floor."
+                location="bottom"
+                max-width="340"
+              >
+                <template #activator="{ props }">
+                  <v-icon v-bind="props" size="x-small" icon="mdi-pin" class="ml-1" style="cursor: help" />
+                </template>
+              </v-tooltip>
             </td>
             <td>{{ c.transmissionCount }}</td>
             <td>{{ formatLocal(c.lastHeardUtc) }}</td>

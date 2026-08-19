@@ -25,6 +25,8 @@ export interface WorkerSettingsDto {
   summaryThreads: number;
   paused: boolean;
   discardRetentionHours: number;
+  noSpeechRetentionHours: number;
+  transcriptionGatherSeconds: number;
 }
 
 export interface AvailableModelsDto {

@@ -25,6 +25,24 @@ export function utcWeeklyToLocal(dayUtc: number, timeUtc: string): { day: number
   return { day: d.getDay(), time: `${pad(d.getHours())}:${pad(d.getMinutes())}` };
 }
 
+/**
+ * Daily schedule conversion — a time of day with no day attached, so the UTC day rollover a
+ * weekly net has to carry simply does not arise.
+ */
+export function utcDailyToLocal(timeUtc: string): string {
+  const [h, m] = timeUtc.split(":").map(Number);
+  const now = new Date();
+  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), h, m));
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+export function localDailyToUtc(timeLocal: string): string {
+  const [h, m] = timeLocal.split(":").map(Number);
+  const d = new Date();
+  d.setHours(h, m, 0, 0);
+  return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:00`;
+}
+
 export function localWeeklyToUtc(dayLocal: number, timeLocal: string): { day: number; time: string } {
   const [h, m] = timeLocal.split(":").map(Number);
   const now = new Date();

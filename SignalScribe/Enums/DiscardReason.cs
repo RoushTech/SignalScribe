@@ -26,4 +26,12 @@ public enum DiscardReason
 
     /// <summary>The level barely moves, so there is no syllable rhythm to find.</summary>
     NoSyllableRhythm = 7,
+
+    /// <summary>
+    /// Discrete symbol levels, so something is transmitting data — but not a mode we can name, and
+    /// knowing only that a signal is digital is not grounds for creating a channel. Recording every
+    /// burst on an unidentified data frequency is precisely the failure
+    /// <see cref="SignalScribe.Analysis.ChannelVoiceAudit"/> exists to undo.
+    /// </summary>
+    DigitalNotIdentified = 8,
 }

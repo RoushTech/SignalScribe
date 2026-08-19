@@ -5,11 +5,19 @@ import { discardDetail, discardLabel } from "@/lib/discardReason";
 import { toneLabel, toneName } from "@/lib/squelchTone";
 import { SettingsApi, type WorkerSettingsDto } from "@/api/SettingsApi";
 import { formatLocal } from "@/lib/time";
+import { transmissionModeChip } from "@/lib/detectedMode";
+import ModeChip from "@/components/ModeChip.vue";
 
 const discards = ref<DiscardDto[]>([]);
 const stats = ref<DiscardStatsDto | null>(null);
 const settings = ref<WorkerSettingsDto | null>(null);
 const busy = ref(false);
+
+// A discard has no channel to compare against — nothing was learned from it by definition — so it
+// gets the plain reading with no mismatch case.
+function discardMode(d: DiscardDto) {
+  return transmissionModeChip(d.mode, null);
+}
 
 async function refresh() {
   [discards.value, stats.value, settings.value] = await Promise.all([
@@ -71,6 +79,7 @@ onMounted(refresh);
             <th>Length</th>
             <th>Audio</th>
             <th>Why it was dropped</th>
+            <th>Mode</th>
             <th>Tone</th>
             <th>Measurements</th>
           </tr>
@@ -91,6 +100,12 @@ onMounted(refresh);
                   </v-chip>
                 </template>
               </v-tooltip>
+            </td>
+            <td>
+              <!-- What was actually on the frequency. On a discard this is often the whole story:
+                   "digital" or "DMR" says the gate was right and the speech tests were beside the point. -->
+              <ModeChip :chip="discardMode(d)" />
+              <span v-if="!discardMode(d)" class="text-medium-emphasis">—</span>
             </td>
             <td>
               <v-tooltip

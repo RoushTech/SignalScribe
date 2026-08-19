@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using Microsoft.Extensions.Logging;
 using SignalScribe.Capture.Spool;
 using SignalScribe.Contracts;
+using SignalScribe.Enums;
 
 namespace SignalScribe.Capture.HostApi;
 
@@ -62,6 +63,69 @@ public sealed class HostClient(HttpClient http, EventSpool spool, string audioRo
         {
             var freqs = await http.GetFromJsonAsync<List<long>>("api/internal/channels", ct);
             return freqs is null ? null : [.. freqs];
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// What each enabled channel is understood to carry. Drives where capture spends its packet
+    /// decoders, which unlike the tone detectors are far too costly to run on every open gate.
+    /// Null when the host is unreachable — keep the previous map.
+    /// </summary>
+    /// <summary>Stored squelch references and adaptive flags, so floors outlive a restart.</summary>
+    public async Task<List<ChannelSquelchInfo>?> GetChannelSquelchAsync(CancellationToken ct)
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<List<ChannelSquelchInfo>>("api/internal/channels/squelch", ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Reports learned floors. Fire-and-forget by design: this is housekeeping, and a host that is
+    /// down must never stall the sample loop — the next report carries the same information.
+    /// </summary>
+    public async Task PostNoiseFloorsAsync(List<NoiseFloorReport> floors, CancellationToken ct)
+    {
+        if (floors.Count == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            await http.PostAsJsonAsync("api/internal/channels/floors", floors, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Floors are re-reported on a timer; a missed one costs nothing.
+        }
+    }
+
+    public async Task<Dictionary<long, DetectedMode>?> GetChannelModesAsync(CancellationToken ct)
+    {
+        try
+        {
+            var modes = await http.GetFromJsonAsync<List<ChannelModeInfo>>("api/internal/channels/modes", ct);
+            if (modes is null)
+            {
+                return null;
+            }
+
+            var map = new Dictionary<long, DetectedMode>(modes.Count);
+            foreach (var m in modes)
+            {
+                map[m.FrequencyHz] = m.Mode;
+            }
+
+            return map;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

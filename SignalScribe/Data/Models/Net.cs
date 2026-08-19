@@ -24,6 +24,11 @@ public class Net : IEntityTypeConfiguration<Net>
 
     public NetScheduleSource Source { get; set; } = NetScheduleSource.Manual;
 
+    /// <summary>
+    /// The UTC day the net's window opens, or <c>null</c> for a net that runs **every day** — daily
+    /// traffic and emergency nets are common. <see cref="StartTimeUtc"/> is what makes a schedule
+    /// exist at all; with no start time the net is simply unscheduled.
+    /// </summary>
     public DayOfWeek? DayOfWeekUtc { get; set; }
 
     public TimeOnly? StartTimeUtc { get; set; }

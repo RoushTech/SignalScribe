@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using SignalScribe.Analysis;
 using SignalScribe.Api.Hubs;
 using SignalScribe.Data;
+using SignalScribe.Data.Models;
 using SignalScribe.Enums;
 
 namespace SignalScribe.Api.Services;
@@ -52,14 +53,20 @@ public sealed class ChannelAuditService(
                 // "Resolved" = transcription has had its say: either it ran, or the clip never had
                 // enough voiced audio to be queued. Pending jobs are excluded on purpose.
                 Resolved = c.Transmissions.Count(t => t.TranscribedByModel != null || t.VoicedMs < 300),
-                Speech = c.Transmissions.Count(t => t.Segments.Any(s => s.Transcript != null)),
+                // Decoded packets live in the segment table too, so "has a transcript" is not the
+                // same as "someone spoke". A beacon frequency must not talk its way out of the audit.
+                Speech = c.Transmissions.Count(t => t.Segments.Any(s =>
+                    s.Transcript != null
+                    && s.TranscriptionModel != Segment.PacketDecoderModel
+                    && s.TranscriptionModel != Segment.DStarHeaderModel)),
             })
             .ToListAsync(ct);
 
         var disabled = 0;
         foreach (var c in candidates)
         {
-            var reason = ChannelVoiceAudit.DisableReason(c.Resolved, c.Speech, c.Channel.LastSpeechUtc);
+            var reason = ChannelVoiceAudit.DisableReason(
+                c.Resolved, c.Speech, c.Channel.LastSpeechUtc, c.Channel.LearnedState?.Mode);
             if (reason is null)
             {
                 continue;

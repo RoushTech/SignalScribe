@@ -8,6 +8,7 @@ export enum DiscardReason {
   TooFastForSpeech = 5,
   NotEnoughVoice = 6,
   NoSyllableRhythm = 7,
+  DigitalNotIdentified = 8,
 }
 
 /** Short label for the chip, and the longer read that hangs off it on hover. */
@@ -43,6 +44,12 @@ export const DISCARD_REASONS: Record<DiscardReason, { label: string; detail: str
   [DiscardReason.NoSyllableRhythm]: {
     label: "flat",
     detail: "The level hardly moves. Speech rises and falls between syllables; this does not.",
+  },
+  [DiscardReason.DigitalNotIdentified]: {
+    label: "digital",
+    detail:
+      "Discrete symbol levels, so something is sending data here — but not a mode we can name, " +
+      "and that alone is not enough to start recording a frequency forever.",
   },
 };
 

@@ -92,6 +92,9 @@ namespace SignalScribe.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
+                    b.Property<bool>("AdaptiveSquelch")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("AutoDisabledReason")
                         .HasMaxLength(256)
                         .HasColumnType("TEXT");
@@ -102,6 +105,9 @@ namespace SignalScribe.Migrations
 
                     b.Property<double?>("CtcssToneHz")
                         .HasColumnType("REAL");
+
+                    b.Property<int?>("DcsCode")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("Description")
                         .HasMaxLength(512)
@@ -123,6 +129,9 @@ namespace SignalScribe.Migrations
 
                     b.Property<string>("LearnedStateJson")
                         .HasColumnType("TEXT");
+
+                    b.Property<int?>("Modulation")
+                        .HasColumnType("INTEGER");
 
                     b.Property<double?>("NoiseFloorDbfs")
                         .HasColumnType("REAL");
@@ -162,6 +171,9 @@ namespace SignalScribe.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<long>("FrequencyHz")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Mode")
                         .HasColumnType("INTEGER");
 
                     b.Property<double>("ModulationDepth")
@@ -315,6 +327,9 @@ namespace SignalScribe.Migrations
                     b.Property<int>("EndMs")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("HeaderFieldsJson")
+                        .HasColumnType("TEXT");
+
                     b.Property<byte[]>("SpeakerEmbedding")
                         .HasColumnType("BLOB");
 
@@ -462,6 +477,9 @@ namespace SignalScribe.Migrations
                     b.Property<double?>("MeanCarrierOffsetHz")
                         .HasColumnType("REAL");
 
+                    b.Property<int>("Mode")
+                        .HasColumnType("INTEGER");
+
                     b.Property<double>("PeakDbfs")
                         .HasColumnType("REAL");
 
@@ -500,6 +518,9 @@ namespace SignalScribe.Migrations
                     b.Property<int>("MaxJobsPerClaim")
                         .HasColumnType("INTEGER");
 
+                    b.Property<int>("NoSpeechRetentionHours")
+                        .HasColumnType("INTEGER");
+
                     b.Property<bool>("Paused")
                         .HasColumnType("INTEGER");
 
@@ -509,6 +530,9 @@ namespace SignalScribe.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<int>("SummaryThreads")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("TranscriptionGatherSeconds")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("TranscriptionPrompt")
@@ -534,9 +558,11 @@ namespace SignalScribe.Migrations
                             Id = 1,
                             DiscardRetentionHours = 24,
                             MaxJobsPerClaim = 4,
+                            NoSpeechRetentionHours = 72,
                             Paused = false,
                             SummaryModel = "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf",
                             SummaryThreads = 0,
+                            TranscriptionGatherSeconds = 20,
                             TranscriptionPrompt = "Amateur radio net. QSL, QRZ, seventy-three, net control, check-in, kerchunk, repeater, simplex, CQ, destinated.",
                             TranscriptionThreads = 0,
                             WhisperModel = "ggml-small.en-q5_1.bin"

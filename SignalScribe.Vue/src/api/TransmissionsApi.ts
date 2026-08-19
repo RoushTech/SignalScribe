@@ -1,4 +1,11 @@
 import http from "@/api/axios";
+import type { DetectedMode } from "@/lib/detectedMode";
+
+/** One field out of a decoded digital-mode header, in the order the mode presents it. */
+export interface HeaderFieldDto {
+  name: string;
+  value: string;
+}
 
 export interface SegmentDto {
   id: number;
@@ -7,6 +14,13 @@ export interface SegmentDto {
   transcript: string | null;
   callsign: string | null;
   speakerId: number | null;
+  /** Human reading of a decoded data frame; null for speech. The raw frame stays in `transcript`. */
+  summary: string | null;
+  /**
+   * Every field decoded out of a digital-mode header (D-STAR today, Fusion and others later); null
+   * on ordinary speech segments. `transcript` carries the one-line summary of the same header.
+   */
+  headerFields?: HeaderFieldDto[] | null;
 }
 
 export interface TransmissionDto {
@@ -23,6 +37,8 @@ export interface TransmissionDto {
   dcsCode: number | null;
   channelCtcssHz: number | null;
   channelDcsCode: number | null;
+  mode: DetectedMode;
+  channelMode: DetectedMode | null;
   segments: SegmentDto[];
 }
 

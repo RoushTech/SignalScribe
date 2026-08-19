@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using SignalScribe.Enums;
 
 namespace SignalScribe.Data.Models;
 
@@ -39,6 +40,14 @@ public class Transmission : IEntityTypeConfiguration<Transmission>
 
     /// <summary>DCS code decoded from the sub-audible bitstream, as the octal number operators quote.</summary>
     public int? DcsCode { get; set; }
+
+    /// <summary>
+    /// Modulation measured from the discriminator for this transmission. Kept per-transmission rather
+    /// than only on the channel because the mismatches are the interesting part: an analog over on a
+    /// DMR channel is someone on the wrong mode, and a different digital mode is a different system
+    /// sharing the frequency.
+    /// </summary>
+    public DetectedMode Mode { get; set; }
 
     /// <summary>Model that last transcribed this clip, e.g. "whisper.net/ggml-small.en-q5_1.bin". Set even when the run found no speech, so "not yet processed" and "processed, nothing said" stay distinguishable.</summary>
     public string? TranscribedByModel { get; set; }

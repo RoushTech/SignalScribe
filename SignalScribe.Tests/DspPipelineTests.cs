@@ -183,7 +183,7 @@ public class DspPipelineTests
                 bin => channelizer.BinFrequencyHz(bin, CenterHz),
                 openDb: 8, closeDb: 5, hangMs: 300,
                 audioRoot, new DateTime(2026, 8, 16, 0, 0, 0, DateTimeKind.Utc),
-                _ => true, // known frequency: bypass voice gate
+                f => f, // known frequency: bypass voice gate
                 posted.Add,
                 NullLogger.Instance);
 
@@ -226,7 +226,7 @@ public class DspPipelineTests
                 bin => channelizer.BinFrequencyHz(bin, CenterHz),
                 openDb: 8, closeDb: 5, hangMs: 300,
                 audioRoot, new DateTime(2026, 8, 16, 0, 0, 0, DateTimeKind.Utc),
-                _ => false, // UNKNOWN frequency — the voice gate decides
+                _ => null, // UNKNOWN frequency — the voice gate decides
                 posted.Add,
                 NullLogger.Instance);
 
@@ -244,6 +244,78 @@ public class DspPipelineTests
         }
     }
 
+    /// <summary>
+    /// A known channel that sits off the analysis grid still gets its record-everything trust.
+    ///
+    /// The known set holds real channel frequencies while the bank works in bins, and most of a
+    /// 5 kHz band plan sits off the 12.5 kHz grid — 147.180 lives 5 kHz above its 147.175 bin.
+    /// An exact-match known lookup therefore missed every off-grid channel: measured on air, the
+    /// voice gate was discarding real overs on 147.180 and 144.920 while both were known and
+    /// enabled. Resolution must go through half a bin, and the posted frequency must be the
+    /// channel's rather than the measurement, or clips whose offset never settles post under bin
+    /// centres and spring phantom half-grid channels into existence (144.3875 collected 29 clips
+    /// that belonged to 144.390).
+    /// </summary>
+    [Fact]
+    public void OffGridKnownChannelKeepsANonVoiceClip()
+    {
+        var audioRoot = Path.Combine(Path.GetTempPath(), $"ss-offgrid-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(audioRoot);
+        try
+        {
+            // A steady unmodulated carrier 4 kHz above bin 32 — nothing about it is voice-like, so
+            // what happens to it is decided entirely by whether the channel is trusted. The channel
+            // deliberately sits off the 5 kHz snap grid (a 12.5 kHz-plan frequency, which real
+            // channel lists do contain), so the measurement snaps to 5 kHz *away* from it and the
+            // posted frequency proves which of the two the ingest actually used.
+            var knownFrequency = CenterHz + (long)(32 * Spacing) + 4_000;
+            var snapWouldSay = CenterHz + (long)(32 * Spacing) + 5_000;
+
+            // Trap armed: on an unknown frequency the gate throws this away.
+            var control = RunCarrierThrough(audioRoot, _ => null, out var controlDiscards);
+            Assert.Empty(control);
+            Assert.NotEmpty(controlDiscards);
+
+            // Known off-grid channel: kept, and filed under the channel rather than the reading.
+            long[] knownSet = [knownFrequency];
+            var posted = RunCarrierThrough(
+                audioRoot,
+                f => KnownFrequencyResolver.Nearest(knownSet, f, (long)(Spacing / 2)),
+                out var discarded);
+
+            var tx = Assert.Single(posted);
+            Assert.Equal(knownFrequency, tx.FrequencyHz);
+            Assert.NotEqual(snapWouldSay, tx.FrequencyHz);
+            Assert.DoesNotContain(discarded, d => Math.Abs(d.FrequencyHz - knownFrequency) <= (long)(Spacing / 2));
+        }
+        finally
+        {
+            Directory.Delete(audioRoot, recursive: true);
+        }
+    }
+
+    private static List<TransmissionIngest> RunCarrierThrough(
+        string audioRoot, Func<long, long?> resolveKnown, out List<DiscardIngest> discarded)
+    {
+        var channelizer = new PolyphaseChannelizer(Fs, Spacing);
+        var posted = new List<TransmissionIngest>();
+        var discards = new List<DiscardIngest>();
+        var bank = new ChannelBank(
+            channelizer.ChannelCount, channelizer.OutputSampleRate, CenterHz,
+            bin => channelizer.BinFrequencyHz(bin, CenterHz),
+            openDb: 8, closeDb: 5, hangMs: 300,
+            audioRoot, DateTime.UtcNow,
+            resolveKnown, posted.Add, NullLogger.Instance, postDiscard: discards.Add);
+        var sink = new ForwardSink(bank);
+
+        channelizer.Process(MakeNoise(0.4), sink);
+        channelizer.Process(MakeTone((32 * Spacing) + 4_000, 1.5), sink);
+        channelizer.Process(MakeNoise(0.8), sink);
+
+        discarded = discards;
+        return posted;
+    }
+
     [Fact]
     public void ActiveGatesAreReportedForLiveStatus()
     {
@@ -256,7 +328,7 @@ public class DspPipelineTests
                 channelizer.ChannelCount, channelizer.OutputSampleRate, CenterHz,
                 bin => channelizer.BinFrequencyHz(bin, CenterHz),
                 openDb: 8, closeDb: 5, hangMs: 300,
-                audioRoot, DateTime.UtcNow, _ => true, _ => { }, NullLogger.Instance);
+                audioRoot, DateTime.UtcNow, f => f, _ => { }, NullLogger.Instance);
             var sink = new HopSink(bank);
 
             channelizer.Process(MakeNoise(0.4), sink);
@@ -290,7 +362,7 @@ public class DspPipelineTests
                 channelizer.ChannelCount, channelizer.OutputSampleRate, CenterHz,
                 bin => channelizer.BinFrequencyHz(bin, CenterHz),
                 openDb: 8, closeDb: 5, hangMs: 300,
-                audioRoot, DateTime.UtcNow, _ => true, posted.Add, NullLogger.Instance);
+                audioRoot, DateTime.UtcNow, f => f, posted.Add, NullLogger.Instance);
             var sink = new ForwardSink(bank);
             for (var i = 0; i < 6; i++)
             {
@@ -321,7 +393,7 @@ public class DspPipelineTests
                 bin => channelizer.BinFrequencyHz(bin, CenterHz),
                 openDb: 8, closeDb: 5, hangMs: 300,
                 audioRoot, DateTime.UtcNow,
-                _ => true, posted.Add, NullLogger.Instance);
+                f => f, posted.Add, NullLogger.Instance);
             var sink = new ForwardSink(bank);
 
             channelizer.Process(MakeNoise(0.5), sink);
@@ -359,7 +431,7 @@ public class DspPipelineTests
                 bin => channelizer.BinFrequencyHz(bin, CenterHz),
                 openDb: 8, closeDb: 5, hangMs: 100,
                 audioRoot, DateTime.UtcNow,
-                _ => false, posted.Add, NullLogger.Instance,
+                _ => null, posted.Add, NullLogger.Instance,
                 postDiscard: discarded.Add,
                 // Compressed from 180/90 s so the scenario fits in a test — the logic is identical.
                 maxOpenSeconds: 1.0, clipRolloverSeconds: 0.4);
@@ -406,7 +478,7 @@ public class DspPipelineTests
                 bin => channelizer.BinFrequencyHz(bin, CenterHz),
                 openDb: 8, closeDb: 5, hangMs: 300,
                 audioRoot, DateTime.UtcNow,
-                _ => false, posted.Add, NullLogger.Instance, postDiscard: discarded.Add);
+                _ => null, posted.Add, NullLogger.Instance, postDiscard: discarded.Add);
             var sink = new ForwardSink(bank);
 
             channelizer.Process(MakeNoise(0.4), sink);                      // settle the floors
@@ -441,7 +513,7 @@ public class DspPipelineTests
                 bin => channelizer.BinFrequencyHz(bin, CenterHz),
                 openDb: 8, closeDb: 5, hangMs: 300,
                 audioRoot, DateTime.UtcNow,
-                _ => true, posted.Add, NullLogger.Instance);
+                f => f, posted.Add, NullLogger.Instance);
             var sink = new ForwardSink(bank);
 
             channelizer.Process(MakeNoise(0.4), sink);
@@ -480,7 +552,7 @@ public class DspPipelineTests
                 bin => channelizer.BinFrequencyHz(bin, CenterHz),
                 openDb: 8, closeDb: 5, hangMs: 300,
                 audioRoot, DateTime.UtcNow,
-                _ => false, posted.Add, NullLogger.Instance, postDiscard: discarded.Add);
+                _ => null, posted.Add, NullLogger.Instance, postDiscard: discarded.Add);
             var sink = new ForwardSink(bank);
 
             channelizer.Process(MakeNoise(0.4), sink);          // settle the floors
@@ -508,7 +580,7 @@ public class DspPipelineTests
                 bin => chan2.BinFrequencyHz(bin, CenterHz),
                 openDb: 8, closeDb: 5, hangMs: 300,
                 audioRoot, DateTime.UtcNow,
-                _ => false, control.Add, NullLogger.Instance, postDiscard: controlDiscards.Add);
+                _ => null, control.Add, NullLogger.Instance, postDiscard: controlDiscards.Add);
             var sink2 = new ForwardSink(unguarded);
             chan2.Process(MakeNoise(0.4), sink2);
             chan2.Process(MakeBandBurst(2, 0.5), sink2);
@@ -541,7 +613,7 @@ public class DspPipelineTests
                 bin => channelizer.BinFrequencyHz(bin, CenterHz),
                 openDb: 8, closeDb: 5, hangMs: 300,
                 audioRoot, DateTime.UtcNow,
-                _ => true, posted.Add, NullLogger.Instance);
+                f => f, posted.Add, NullLogger.Instance);
             var sink = new ForwardSink(bank);
 
             channelizer.Process(MakeNoise(0.4), sink);
@@ -582,7 +654,7 @@ public class DspPipelineTests
                 bin => channelizer.BinFrequencyHz(bin, CenterHz),
                 openDb: 8, closeDb: 5, hangMs: 300,
                 audioRoot, DateTime.UtcNow,
-                _ => true, posted.Add, NullLogger.Instance, postDiscard: discarded.Add);
+                f => f, posted.Add, NullLogger.Instance, postDiscard: discarded.Add);
             var sink = new ForwardSink(bank);
 
             channelizer.Process(MakeNoise(0.4), sink);

@@ -14,7 +14,9 @@ public sealed class WorkerSettingsProvider(IHttpClientFactory httpFactory, ILogg
         TranscriptionThreads: 0,
         SummaryThreads: 0,
         Paused: false,
-        DiscardRetentionHours: 24);
+        DiscardRetentionHours: 24,
+        NoSpeechRetentionHours: 72,
+        TranscriptionGatherSeconds: 20);
 
     public async Task RefreshAsync(CancellationToken ct = default)
     {

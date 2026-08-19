@@ -39,7 +39,9 @@ public record WorkerSettingsDto(
     int TranscriptionThreads,
     int SummaryThreads,
     bool Paused,
-    int DiscardRetentionHours);
+    int DiscardRetentionHours,
+    int NoSpeechRetentionHours,
+    int TranscriptionGatherSeconds);
 
 /// <summary>Model files actually present in the models directory, for the settings dropdowns.</summary>
 public record AvailableModelsDto(List<string> Whisper, List<string> Summary);

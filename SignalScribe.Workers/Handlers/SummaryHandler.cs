@@ -35,7 +35,7 @@ public sealed class SummaryHandler(
             throw new InvalidOperationException($"Summary model not found: {modelPath} (run scripts/download-models.sh)");
         }
 
-        var prompt = BuildPrompt(facts);
+        var prompt = SignalScribe.Analysis.SummaryPrompt.Build(facts);
         var threads = SignalScribe.Analysis.WorkerThreads.Resolve(settings.Current.SummaryThreads);
         var parameters = new ModelParams(modelPath)
         {
@@ -51,7 +51,9 @@ public sealed class SummaryHandler(
             var executor = new StatelessExecutor(weights, parameters);
             var inference = new InferenceParams
             {
-                MaxTokens = 400,
+                // Scaled with the material, like the requested length — a fixed ceiling silently
+                // truncated the long sessions that most needed the room.
+                MaxTokens = SignalScribe.Analysis.SummaryPrompt.MaxTokens(facts.Transcript.Length),
                 AntiPrompts = ["<|im_end|>"],
             };
 
@@ -71,28 +73,5 @@ public sealed class SummaryHandler(
 
         await api.PostSessionSummaryAsync(sessionId, new SessionSummaryIngest($"llama.cpp/{modelFile}", summary), ct);
         logger.LogInformation("Summarized session {Id} ({Chars} chars)", sessionId, summary.Length);
-    }
-
-    /// <summary>ChatML prompt (Qwen-style). Facts are authoritative; the model is told not to invent beyond them.</summary>
-    private static string BuildPrompt(SessionFacts facts)
-    {
-        var transcript = facts.Transcript.Length > 24_000 ? facts.Transcript[..24_000] + "\n[transcript truncated]" : facts.Transcript;
-        var kind = facts.IsNet ? $"an amateur radio net{(facts.NetName is null ? "" : $" (\"{facts.NetName}\")")}" : "an amateur radio conversation";
-        var roster = facts.Callsigns.Count > 0 ? string.Join(", ", facts.Callsigns) : "none identified";
-
-        return $"""
-            <|im_start|>system
-            You summarize amateur radio activity logs. Write a concise narrative summary (3-6 sentences) of the session below.
-            Only state facts supported by the transcript and metadata. Do not invent callsigns, names, or events.<|im_end|>
-            <|im_start|>user
-            Session: {kind} on {facts.ChannelLabel} ({facts.FrequencyHz / 1_000_000.0:F4} MHz)
-            Start: {facts.StartUtc:yyyy-MM-dd HH:mm} UTC, duration: {(facts.EndUtc is null ? "unknown" : $"{(facts.EndUtc.Value - facts.StartUtc).TotalMinutes:F0} minutes")}
-            Transmissions: {facts.TransmissionCount}
-            Callsigns heard: {roster}
-
-            Transcript:
-            {transcript}<|im_end|>
-            <|im_start|>assistant
-            """;
     }
 }

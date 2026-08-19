@@ -309,6 +309,27 @@ onUnmounted(() => {
               persistent-hint
             />
           </v-col>
+          <v-col cols="6" md="3">
+            <v-text-field
+              v-model.number="workers.transcriptionGatherSeconds"
+              label="Gather clips before transcribing (s)"
+              type="number"
+              min="0"
+              max="120"
+              hint="Whisper costs the same per run whether it holds 1s or 30s of audio, so waiting to fill a window turns several runs into one. 0 transcribes each clip as it arrives."
+              persistent-hint
+            />
+          </v-col>
+          <v-col cols="6" md="3">
+            <v-text-field
+              v-model.number="workers.noSpeechRetentionHours"
+              label="Keep no-speech clips (hours)"
+              type="number"
+              min="1"
+              hint="Kept recordings that settled as empty age out after this; digital voice and data clips never do"
+              persistent-hint
+            />
+          </v-col>
         </v-row>
       </v-card-text>
       <v-card-actions>

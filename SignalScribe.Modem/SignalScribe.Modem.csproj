@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    MIT, unlike the rest of the solution (GPLv3) — see LICENSE and README.md in this directory.
+    Keep it dependency-free: the receive path is pure managed DSP and protocol code, and staying
+    that way is what makes it trivially portable back to DireControl.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

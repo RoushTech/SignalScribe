@@ -1,13 +1,16 @@
 using Microsoft.EntityFrameworkCore;
+using SignalScribe.Analysis;
 using SignalScribe.Data;
+using SignalScribe.Enums;
 
 namespace SignalScribe.Api.Services;
 
 /// <summary>
-/// Retention sweep for rejected clips: deletes rows and their audio files once they age past the
-/// operator's retention window. Runs hourly in the web host (the single DB writer) — a timer here
-/// rather than a second job framework, since the existing job queue covers worker-side retries and
-/// this is one periodic housekeeping task.
+/// Retention sweep for clips with nothing in them: rejected clips, and kept recordings that settled
+/// as empty (see <see cref="NoSpeechRetention"/>). Each ages past its own operator-set window, then
+/// rows and audio files go together. Runs hourly in the web host (the single DB writer) — a timer
+/// here rather than a second job framework, since the existing job queue covers worker-side retries
+/// and this is one periodic housekeeping task.
 /// </summary>
 public sealed class DiscardPurgeService(
     IServiceScopeFactory scopeFactory,
@@ -29,6 +32,12 @@ public sealed class DiscardPurgeService(
                 if (removed > 0)
                 {
                     logger.LogInformation("Purged {Count} expired discarded clips", removed);
+                }
+
+                var emptied = await PurgeNoSpeechAsync(stoppingToken);
+                if (emptied > 0)
+                {
+                    logger.LogInformation("Purged {Count} expired no-speech recordings", emptied);
                 }
             }
             catch (Exception ex)
@@ -68,6 +77,51 @@ public sealed class DiscardPurgeService(
     {
         var settings = await db.WorkerSettings.FindAsync([1], ct);
         return Math.Clamp(settings?.DiscardRetentionHours ?? 24, 1, 720);
+    }
+
+    /// <summary>
+    /// Removes kept recordings that settled as empty and aged past the no-speech window. The SQL
+    /// narrows; <see cref="NoSpeechRetention.IsPurgeable"/> decides — one definition of "empty",
+    /// testable on its own, with the query only ever a superset of it.
+    /// </summary>
+    public async Task<int> PurgeNoSpeechAsync(CancellationToken ct)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<SignalScribeContext>();
+
+        var settings = await db.WorkerSettings.FindAsync([1], ct);
+        var hours = Math.Clamp(settings?.NoSpeechRetentionHours ?? 72, 1, 8_760);
+        var cutoff = DateTime.UtcNow.AddHours(-hours);
+
+        var candidates = await db.Transmissions
+            .Include(t => t.Segments)
+            .Where(t => t.StartUtc < cutoff
+                && (t.Mode == DetectedMode.AnalogFm || t.Mode == DetectedMode.Unknown)
+                && !t.Segments.Any(s => s.Transcript != null && s.Transcript != "")
+                && (t.TranscribedByModel != null || t.VoicedMs < NoSpeechRetention.MinVoicedMs))
+            .ToListAsync(ct);
+
+        var expired = candidates
+            .Where(t => NoSpeechRetention.IsPurgeable(
+                t.Mode,
+                transcribed: t.TranscribedByModel is not null,
+                t.VoicedMs,
+                anySegmentHasText: t.Segments.Any(s => !string.IsNullOrWhiteSpace(s.Transcript))))
+            .ToList();
+        if (expired.Count == 0)
+        {
+            return 0;
+        }
+
+        var audioRoot = Path.GetFullPath(config.GetValue("AudioDirectory", "audio")!);
+        foreach (var transmission in expired)
+        {
+            TryDeleteFile(audioRoot, transmission.AudioPath);
+        }
+
+        db.Transmissions.RemoveRange(expired);
+        await db.SaveChangesAsync(ct);
+        return expired.Count;
     }
 
     private void TryDeleteFile(string audioRoot, string relativePath)

@@ -1,4 +1,6 @@
+using SignalScribe.Analysis;
 using SignalScribe.Data.Models;
+using SignalScribe.Enums;
 
 namespace SignalScribe.Api.Controllers.Models;
 
@@ -6,7 +8,7 @@ namespace SignalScribe.Api.Controllers.Models;
 public static class TransmissionMapper
 {
     /// <summary>Transcription threshold — mirrors the capture-side voice measurement gate in EventsController.</summary>
-    public const int MinVoicedMs = 300;
+    public const int MinVoicedMs = Analysis.NoSpeechRetention.MinVoicedMs;
 
     public static TransmissionDto ToDto(Transmission t) => new(
         t.Id,
@@ -22,9 +24,14 @@ public static class TransmissionMapper
         t.DcsCode,
         t.Channel.CtcssToneHz ?? t.Channel.LearnedState?.CtcssToneHz,
         t.Channel.LearnedState?.DcsCode,
+        t.Mode,
+        t.Channel.Modulation ?? t.Channel.LearnedState?.Mode,
         t.Segments
             .OrderBy(s => s.StartMs)
-            .Select(s => new SegmentDto(s.Id, s.StartMs, s.EndMs, s.Transcript, s.Callsign, s.SpeakerId))
+            .Select(s => new SegmentDto(
+                s.Id, s.StartMs, s.EndMs, s.Transcript, s.Callsign, s.SpeakerId,
+                s.TranscriptionModel == Segment.PacketDecoderModel ? AprsSummary.Describe(s.Transcript) : null,
+                s.HeaderFields))
             .ToList());
 
     private static string Status(Transmission t)
@@ -34,16 +41,38 @@ public static class TransmissionMapper
             return "double";
         }
 
+        // Data before transcripts: a decoded packet *is* stored as a segment with text, so the
+        // transcript test below would otherwise report a beacon as "transcribed", which reads as
+        // someone having spoken.
+        //
+        // The channel's understood mode counts too. A burst on a data frequency that failed to
+        // decode is still data — it is not transcribed, so calling it anything else would leave it
+        // reading as pending forever.
+        var channelMode = t.Channel.Modulation ?? t.Channel.LearnedState?.Mode;
+        if (t.Mode.IsData() || (channelMode?.IsData() == true && !t.Mode.IsDigitalVoice()))
+        {
+            return t.Segments.Count > 0 ? "decoded" : "data";
+        }
+
         if (t.Segments.Any(s => !string.IsNullOrWhiteSpace(s.Transcript)))
         {
             return "transcribed";
         }
 
-        if (t.VoicedMs < MinVoicedMs || t.TranscribedByModel is not null)
+        // Digital voice cannot be transcribed until a vocoder is wired up, so it is neither
+        // "processing" (nothing is coming) nor "no speech" (there very likely was some). Where a
+        // header was recovered we do at least know *who* — which is a materially different state from
+        // knowing nothing about the transmission at all, and worth saying so.
+        if (t.Mode.IsDigitalVoice())
         {
-            return "no speech"; // either never worth transcribing, or transcribed and nothing was said
+            return t.Segments.Count > 0 ? "identified" : "not decoded";
         }
 
-        return "processing";
+        // "processing" must mean a run is genuinely coming. Anything the gate declined is finished,
+        // whatever the reason, and says so.
+        return Analysis.TranscriptionGate.IsAwaitingTranscription(
+            t.Mode, channelMode, t.IsDouble, t.VoicedMs, t.TranscribedByModel is not null)
+            ? "processing"
+            : "no speech"; // never worth a run, or transcribed and nothing was said
     }
 }

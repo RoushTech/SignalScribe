@@ -11,10 +11,15 @@ public record ChannelDto(
     string? Callsign,
     string? Description,
     double? CtcssToneHz,
+    int? DcsCode,
     string? Notes,
     double? NoiseFloorDbfs,
+    bool AdaptiveSquelch,
     double? MeasuredCtcssToneHz,
     int? MeasuredDcsCode,
+    DetectedMode? Modulation,
+    DetectedMode? MeasuredMode,
+    DateTime? ModeUpdatedUtc,
     int TransmissionCount,
     DateTime? LastHeardUtc,
     string? AutoDisabledReason,
@@ -28,4 +33,14 @@ public record ChannelUpsertRequest(
     string? Callsign,
     string? Description,
     double? CtcssToneHz,
-    string? Notes);
+    string? Notes,
+    DetectedMode? Modulation = null,
+    /// <summary>
+    /// DCS code, as the octal number operators quote. Mutually exclusive with
+    /// <see cref="CtcssToneHz"/> — they are alternative systems, never both.
+    /// </summary>
+    int? DcsCode = null,
+    /// <summary>False pins the channel's squelch reference at its stored value.</summary>
+    bool AdaptiveSquelch = true,
+    /// <summary>Squelch reference to pin, when adaptive tracking is off.</summary>
+    double? NoiseFloorDbfs = null);

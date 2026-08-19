@@ -14,6 +14,7 @@ WORKDIR /src
 COPY SignalScribe/SignalScribe.csproj SignalScribe/
 COPY SignalScribe.Api/SignalScribe.Api.csproj SignalScribe.Api/
 COPY SignalScribe.Capture/SignalScribe.Capture.csproj SignalScribe.Capture/
+COPY SignalScribe.Modem/SignalScribe.Modem.csproj SignalScribe.Modem/
 COPY SignalScribe.Workers/SignalScribe.Workers.csproj SignalScribe.Workers/
 RUN dotnet restore SignalScribe.Api/SignalScribe.Api.csproj \
     && dotnet restore SignalScribe.Capture/SignalScribe.Capture.csproj \
@@ -21,6 +22,7 @@ RUN dotnet restore SignalScribe.Api/SignalScribe.Api.csproj \
 COPY SignalScribe/ SignalScribe/
 COPY SignalScribe.Api/ SignalScribe.Api/
 COPY SignalScribe.Capture/ SignalScribe.Capture/
+COPY SignalScribe.Modem/ SignalScribe.Modem/
 COPY SignalScribe.Workers/ SignalScribe.Workers/
 RUN dotnet publish SignalScribe.Api/SignalScribe.Api.csproj -c Release -o /app/api \
     && dotnet publish SignalScribe.Capture/SignalScribe.Capture.csproj -c Release -o /app/capture \

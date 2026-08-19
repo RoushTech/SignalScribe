@@ -1,0 +1,54 @@
+SignalScribe — licensing summary and additional permission
+===========================================================
+
+Copyright (C) 2026 William Roush / RoushTech
+
+SignalScribe is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version. The full text is in LICENSE.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+
+Additional permission under GNU GPL version 3 section 7 — SDR hardware APIs
+---------------------------------------------------------------------------
+
+SignalScribe talks to receiver hardware through vendor-supplied APIs that are
+not free software. The SDRplay API (sdrplay_api) is proprietary, is distributed
+by SDRplay Ltd. under its own terms, and cannot be relicensed by this project.
+Without an explicit permission, distributing a GPLv3 binary linked against it
+would be legally awkward, which would make the program undistributable in the
+only form in which it is useful.
+
+Therefore, as a special exception, the copyright holder of SignalScribe gives
+you permission to link this program with, and to convey the resulting work
+under the GPL, code that interfaces with proprietary SDR hardware support
+libraries, specifically including but not limited to the SDRplay API
+(sdrplay_api), and to copy and distribute the resulting executable under terms
+of your choice for the linking portion, provided that you also meet the terms
+and conditions of the GNU General Public License for every other part of the
+work.
+
+If you modify this program, you may extend this exception to your version of
+the program, but you are not obliged to do so. If you do not wish to do so,
+delete this exception statement from your version.
+
+
+Third-party code
+----------------
+
+Parts of this repository carry their own, more permissive terms. Where a
+subdirectory contains its own LICENSE file, that file governs the contents of
+that subdirectory:
+
+  SignalScribe.Modem/   MIT. Vendored from RoushTech/DireControl (also MIT) and
+                        kept permissive on purpose, so improvements made here
+                        can flow back to DireControl. GPL code must not be
+                        copied into this subdirectory.
+
+Ported code elsewhere in the tree records its upstream project and licence in a
+header comment on the file. Under the GPL that attribution is an obligation,
+not a courtesy.

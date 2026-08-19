@@ -15,6 +15,13 @@ namespace SignalScribe.Api.Controllers.Internal;
 [Route("api/internal/events")]
 public class EventsController(SignalScribeContext db, IHubContext<StatusHub> hub) : ControllerBase
 {
+    /// <summary>Callsign without its SSID: "KD9ABC-7" and "KD9ABC" are the same operator.</summary>
+    private static string StripSsid(string address)
+    {
+        var dash = address.IndexOf('-');
+        return (dash < 0 ? address : address[..dash]).TrimEnd('*');
+    }
+
     [HttpPost("transmissions")]
     public async Task<ActionResult<TransmissionIngestResult>> IngestTransmission(TransmissionIngest ingest)
     {
@@ -50,6 +57,7 @@ public class EventsController(SignalScribeContext db, IHubContext<StatusHub> hub
             VoicedMs = ingest.VoicedMs,
             CtcssHz = ingest.CtcssHz,
             DcsCode = ingest.DcsCode,
+            Mode = ingest.Mode,
             Markers = ingest.Markers
                 .Select(m => new Marker { Type = m.Type, OffsetMs = m.OffsetMs, Confidence = m.Confidence })
                 .ToList(),
@@ -59,27 +67,89 @@ public class EventsController(SignalScribeContext db, IHubContext<StatusHub> hub
         // The tone identifies the system behind the frequency — two repeaters often share an output
         // channel and the tone is what tells them apart. Learn it, but never overwrite what the
         // operator configured by hand.
+        // The measured mode is learned the same way and for the same reason: it says what the
+        // frequency carries, and a change of mode is a different system on it. Only a mode we could
+        // actually name is worth recording — "some kind of digital" would overwrite a good answer
+        // with an unhelpful one every time a burst arrived too weak to classify.
+        var learnedMode = ingest.Mode.IsIdentified() ? ingest.Mode : (DetectedMode?)null;
+
         if ((ingest.CtcssHz is { } tone && channel.LearnedState?.CtcssToneHz != tone)
-            || (ingest.DcsCode is { } dcs && channel.LearnedState?.DcsCode != dcs))
+            || (ingest.DcsCode is { } dcs && channel.LearnedState?.DcsCode != dcs)
+            || (learnedMode is { } mode && channel.LearnedState?.Mode != mode))
         {
             var learned = channel.LearnedState ?? new ChannelLearnedState();
             learned.CtcssToneHz = ingest.CtcssHz ?? learned.CtcssToneHz;
             learned.DcsCode = ingest.DcsCode ?? learned.DcsCode;
+            if (learnedMode is { } newMode)
+            {
+                learned.Mode = newMode;
+                learned.ModeUpdatedUtc = DateTime.UtcNow;
+            }
+
             learned.UpdatedUtc = DateTime.UtcNow;
             channel.LearnedState = learned;
+        }
+
+        // Decoded packets become segments, so they land in the FTS index and every list view without
+        // a parallel set of tables. Deliberately *not* routed through IngestTranscript: that path
+        // stamps LastSpeechUtc and clears AutoDisabledReason, and an APRS beacon must never count as
+        // someone talking — it would re-enable exactly the data frequencies the audit exists to shut.
+        if (ingest.Packets is { Count: > 0 } packets)
+        {
+            transmission.Segments = [.. packets.Select(p => new Segment
+            {
+                StartMs = p.OffsetMs,
+                EndMs = p.OffsetMs + p.DurationMs,
+                Transcript = p.Tnc2,
+                TranscriptionModel = Segment.PacketDecoderModel,
+                // The sending station's callsign is a fact off the wire, not a guess from a phonetic
+                // transcript — strip the SSID so it joins up with callsigns seen on voice.
+                Callsign = StripSsid(p.Source),
+            })];
+        }
+
+        // A decoded digital header is the same kind of thing: identity and routing read straight off
+        // the air, with no vocoder and no transcription involved. Stored as a segment so the
+        // callsign joins up with the same station heard on analog voice, and marked as decoded data
+        // so it never counts as someone having spoken. The summary is what lists and search show;
+        // the full field set rides along beside it, because on a mode whose voice we cannot decode
+        // the header is the entire content of the transmission.
+        if (ingest.DigitalHeaders is { Count: > 0 } headers)
+        {
+            transmission.Segments = [.. transmission.Segments, .. headers.Select(h => new Segment
+            {
+                StartMs = h.OffsetMs,
+                EndMs = h.OffsetMs,
+                Transcript = h.Summary,
+                TranscriptionModel = Segment.HeaderModel(h.Mode),
+                Callsign = h.Callsign,
+                HeaderFields = h.Fields,
+            })];
         }
 
         await db.SaveChangesAsync();
 
         // Only transcribe clips with actual speech in them. Whisper hallucinates on noise — most
         // visibly by echoing its own initial_prompt back as a transcript — so noise clips (which we
-        // still record and keep on known channels) never reach it.
-        if (!ingest.IsDouble && ingest.VoicedMs >= 300)
+        // still record and keep on known channels) never reach it. Digital voice is excluded for the
+        // same practical reason from the other direction: there is speech in there, but no vocoder
+        // is wired up yet, so all Whisper can do with DMR buzz is hallucinate — the status surface
+        // says "not decoded" rather than pretending a transcript is coming.
+        // The channel's understood mode is part of the decision, not just the transmission's own: an
+        // APRS burst that failed its CRC reads as analog and would otherwise buy a full Whisper run
+        // — and a run costs the same as thirty seconds of speech whatever is in it.
+        if (Analysis.TranscriptionGate.ShouldTranscribe(
+            ingest.Mode,
+            channel.Modulation ?? channel.LearnedState?.Mode,
+            ingest.IsDouble,
+            ingest.VoicedMs))
         {
+            // The voiced length rides along so the worker can tell when it has gathered enough to
+            // fill a Whisper window without fetching every transmission first.
             db.Jobs.Add(new Job
             {
                 Type = JobType.Transcribe,
-                PayloadJson = $$"""{"transmissionId":{{transmission.Id}}}""",
+                PayloadJson = $$"""{"transmissionId":{{transmission.Id}},"voicedMs":{{ingest.VoicedMs}}}""",
                 CreatedUtc = DateTime.UtcNow,
             });
             await db.SaveChangesAsync();
@@ -112,6 +182,18 @@ public class EventsController(SignalScribeContext db, IHubContext<StatusHub> hub
                 {
                     channel.AutoDisabledReason = null;
                     channel.Enabled = true;
+                }
+
+                // The same proof demotes a learned digital-voice mode — which nothing else can,
+                // since analog FM is not an identified mode and never overwrites the learned one.
+                // The transmissions that false label silenced get their transcription back.
+                if (channel.LearnedState is { } learned && Analysis.LearnedModeDemotion.TranscriptDisproves(learned.Mode))
+                {
+                    learned.Mode = null;
+                    learned.ModeUpdatedUtc = DateTime.UtcNow;
+                    learned.UpdatedUtc = DateTime.UtcNow;
+                    channel.LearnedState = learned;
+                    await RequeueSilencedTransmissionsAsync(channel.Id);
                 }
             }
         }
@@ -146,6 +228,34 @@ public class EventsController(SignalScribeContext db, IHubContext<StatusHub> hub
         return Ok();
     }
 
+    /// <summary>
+    /// Re-queues transcription for the channel's recordings that a disproved digital-voice verdict
+    /// silenced: untranscribed, voice-like, and never vouched for by a decoded header. Their mode
+    /// reverts to Unknown — the verdict that named it has just been shown unreliable on this
+    /// channel, and if one really was digital, its transcription simply finds no speech.
+    /// </summary>
+    private async Task RequeueSilencedTransmissionsAsync(int channelId)
+    {
+        var candidates = await db.Transmissions
+            .Where(t => t.ChannelId == channelId
+                && t.TranscribedByModel == null
+                && Analysis.LearnedModeDemotion.DigitalVoiceModes.Contains(t.Mode)
+                && !t.Segments.Any(s => s.TranscriptionModel == Segment.DStarHeaderModel))
+            .ToListAsync();
+
+        foreach (var suspect in candidates.Where(t => Analysis.LearnedModeDemotion.IsSuspect(
+            t.Mode, hasDecodedHeader: false, alreadyTranscribed: false, t.VoicedMs, t.IsDouble)))
+        {
+            suspect.Mode = DetectedMode.Unknown;
+            db.Jobs.Add(new Job
+            {
+                Type = JobType.Transcribe,
+                PayloadJson = $$"""{"transmissionId":{{suspect.Id}}}""",
+                CreatedUtc = DateTime.UtcNow,
+            });
+        }
+    }
+
     /// <summary>Rejected clips: recorded for review, not attached to any channel, purged on a schedule.</summary>
     [HttpPost("discards")]
     public async Task<IActionResult> IngestDiscard(DiscardIngest ingest)
@@ -166,8 +276,9 @@ public class EventsController(SignalScribeContext db, IHubContext<StatusHub> hub
                 ModulationDepth = ingest.ModulationDepth,
                 SyllableRateHz = ingest.SyllableRateHz,
                 SustainedTone = ingest.SustainedTone,
-            CtcssHz = ingest.CtcssHz,
-            DcsCode = ingest.DcsCode,
+                CtcssHz = ingest.CtcssHz,
+                DcsCode = ingest.DcsCode,
+                Mode = ingest.Mode,
             });
             await db.SaveChangesAsync();
         }

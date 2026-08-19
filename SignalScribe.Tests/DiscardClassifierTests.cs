@@ -14,8 +14,9 @@ public class DiscardClassifierTests
         double speechBandRatio = 0.7,
         double syllableRateHz = 4,
         int voicedMs = 2_000,
-        double modulationDepth = 0.6) =>
-        DiscardClassifier.Classify(overload, presentMs, sustainedTone, speechBandRatio, syllableRateHz, voicedMs, modulationDepth);
+        double modulationDepth = 0.6,
+        DetectedMode mode = DetectedMode.Unknown) =>
+        DiscardClassifier.Classify(overload, presentMs, sustainedTone, speechBandRatio, syllableRateHz, voicedMs, modulationDepth, mode);
 
     [Fact]
     public void OverloadOutranksEverythingElse()
@@ -44,6 +45,27 @@ public class DiscardClassifierTests
         Assert.Equal(DiscardReason.OutsideSpeechBand, Classify(speechBandRatio: 0.02, syllableRateHz: 29.6));
         // With voice-band energy present, the syllable rate is what gives it away.
         Assert.Equal(DiscardReason.TooFastForSpeech, Classify(speechBandRatio: 0.5, syllableRateHz: 24));
+    }
+
+    [Fact]
+    public void UnidentifiedDigitalIsReportedAsSuchRatherThanAsItsSymptoms()
+    {
+        // Data has no speech band, no syllable rhythm and a flat-looking envelope, so all three audio
+        // tests fire on it — and each would report a symptom instead of the cause. Saying "digital,
+        // not identified" tells the operator something they can act on.
+        Assert.Equal(
+            DiscardReason.DigitalNotIdentified,
+            Classify(speechBandRatio: 0.02, syllableRateHz: 29.6, mode: DetectedMode.DigitalUnknown));
+    }
+
+    [Fact]
+    public void OverloadStillOutranksADigitalVerdict()
+    {
+        // Nothing measured while the ADC was clipping is real, the classifier's level histogram least
+        // of all — compression products make their own structure.
+        Assert.Equal(
+            DiscardReason.FrontEndOverload,
+            Classify(overload: true, mode: DetectedMode.DigitalUnknown));
     }
 
     [Fact]

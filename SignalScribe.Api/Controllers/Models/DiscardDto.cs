@@ -13,7 +13,8 @@ public record DiscardDto(
     double SyllableRateHz,
     bool SustainedTone,
     double? CtcssHz,
-    int? DcsCode);
+    int? DcsCode,
+    SignalScribe.Enums.DetectedMode Mode);
 
 public record ReasonCountDto(SignalScribe.Enums.DiscardReason Reason, int Count);
 

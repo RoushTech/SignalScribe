@@ -37,6 +37,25 @@ public class WorkerSettings : IEntityTypeConfiguration<WorkerSettings>
     /// <summary>How long rejected clips are kept for review before the daily purge removes them.</summary>
     public int DiscardRetentionHours { get; set; }
 
+    /// <summary>
+    /// How long kept clips that settled as empty — transcribed with nothing said, or never voiced
+    /// enough to queue — stay before the purge removes them. See
+    /// <see cref="SignalScribe.Analysis.NoSpeechRetention"/> for what qualifies; digital voice and
+    /// data clips never age out this way.
+    /// </summary>
+    public int NoSpeechRetentionHours { get; set; }
+
+    /// <summary>
+    /// How long to keep gathering clips before spending a Whisper run on them, in seconds. Zero
+    /// runs each clip as it arrives.
+    ///
+    /// This is a straight latency-for-CPU trade, and a lopsided one: a run costs the same whether
+    /// it carries one second of audio or thirty, so gathering a conversation's overs into one
+    /// window turns five runs into one. See <see cref="SignalScribe.Analysis.BatchGather"/>. Keep it
+    /// well under the job lease, since gathered jobs are held under lease while waiting.
+    /// </summary>
+    public int TranscriptionGatherSeconds { get; set; }
+
     public void Configure(EntityTypeBuilder<WorkerSettings> builder)
     {
         builder.Property(w => w.WhisperModel).HasMaxLength(128);
@@ -55,6 +74,8 @@ public class WorkerSettings : IEntityTypeConfiguration<WorkerSettings>
             SummaryThreads = 0,
             Paused = false,
             DiscardRetentionHours = 24,
+            NoSpeechRetentionHours = 72,
+            TranscriptionGatherSeconds = 20,
         });
     }
 }

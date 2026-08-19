@@ -7,6 +7,10 @@ import { TransmissionsApi, type TransmissionDto } from "@/api/TransmissionsApi";
 import { SearchApi, type SearchHitDto } from "@/api/SearchApi";
 import { JOB_TYPE_NAMES, ProcessingApi, type FailedJobDto, type ProcessingStatsDto } from "@/api/ProcessingApi";
 import { formatLocal, formatFrequency } from "@/lib/time";
+import ModeChip from "@/components/ModeChip.vue";
+import HeaderFields from "@/components/HeaderFields.vue";
+import { transmissionModeChip } from "@/lib/detectedMode";
+import { statusColor, statusDetail } from "@/lib/transmissionStatus";
 import { useRouter } from "vue-router";
 
 const statuses = ref<Map<string, ServiceStatusUpdate>>(new Map());
@@ -28,15 +32,6 @@ function mergeTransmission(incoming: TransmissionDto) {
     transmissions.value = [...transmissions.value];
   } else {
     transmissions.value = [incoming, ...transmissions.value].slice(0, 40);
-  }
-}
-
-function statusColor(status: string): string {
-  switch (status) {
-    case "transcribed": return "success";
-    case "processing": return "info";
-    case "double": return "warning";
-    default: return "grey";
   }
 }
 
@@ -139,6 +134,10 @@ function toneChip(t: TransmissionDto) {
       ? `${heard.what}, read from below the voice and filtered out of the audio.`
       : `${heard.what}, but this channel normally runs ${expects}. A different system on the same frequency, or someone with the wrong tone set.`,
   };
+}
+
+function modeChip(t: TransmissionDto) {
+  return transmissionModeChip(t.mode, t.channelMode);
 }
 </script>
 
@@ -299,7 +298,7 @@ function toneChip(t: TransmissionDto) {
             <td>—</td>
             <td />
           </tr>
-          <tr v-for="t in transmissions" :key="t.id">
+          <tr v-for="t in transmissions" :key="t.id" class="tx-row">
             <td>
               <a style="cursor: pointer; text-decoration: underline" @click="router.push(`/channels/${t.channelId}`)">
                 {{ t.channelLabel }}
@@ -310,7 +309,19 @@ function toneChip(t: TransmissionDto) {
               <audio :src="TransmissionsApi.audioUrl(t.id)" controls preload="none" style="height: 30px; width: 220px" />
             </td>
             <td style="white-space: nowrap">
-              <v-chip size="x-small" variant="outlined" :class="`text-${statusColor(t.status)}`">{{ t.status }}</v-chip>
+              <v-tooltip :text="statusDetail(t.status)" location="bottom" max-width="360" :disabled="!statusDetail(t.status)">
+                <template #activator="{ props }">
+                  <v-chip
+                    v-bind="props"
+                    size="x-small"
+                    variant="outlined"
+                    style="cursor: help"
+                    :class="`text-${statusColor(t.status)}`"
+                  >
+                    {{ t.status }}
+                  </v-chip>
+                </template>
+              </v-tooltip>
               <v-tooltip v-if="toneChip(t)" :text="toneChip(t)!.detail" location="bottom" max-width="360">
                 <template #activator="{ props }">
                   <v-chip
@@ -326,6 +337,7 @@ function toneChip(t: TransmissionDto) {
                   </v-chip>
                 </template>
               </v-tooltip>
+              <ModeChip :chip="modeChip(t)" class="ml-1" />
             </td>
             <td>
               <template v-if="!t.isDouble">
@@ -339,7 +351,27 @@ function toneChip(t: TransmissionDto) {
                 >
                   {{ cs }}
                 </v-chip>
-                <span>{{ t.segments.map((s) => s.transcript).filter(Boolean).join(" ") || "—" }}</span>
+                <!--
+                  A decoded packet shows its human reading, with the raw TNC2 frame on hover: the
+                  frame is the record and packet operators read it directly, but a list of
+                  transmissions is more useful saying where a station is than quoting APRS syntax.
+                -->
+                <template v-if="t.segments.some((s) => s.summary)">
+                  <v-tooltip
+                    v-for="s in t.segments.filter((s) => s.summary)"
+                    :key="s.id"
+                    :text="s.transcript ?? ''"
+                    location="bottom"
+                    max-width="480"
+                  >
+                    <template #activator="{ props }">
+                      <span v-bind="props" style="cursor: help" class="mr-2">{{ s.summary }}</span>
+                    </template>
+                  </v-tooltip>
+                </template>
+                <span v-else>{{ t.segments.map((s) => s.transcript).filter(Boolean).join(" ") || "—" }}</span>
+                <!-- Digital header: the line above is its summary, this is every field it carried. -->
+                <HeaderFields :segments="t.segments" />
               </template>
             </td>
             <td>
@@ -357,3 +389,12 @@ function toneChip(t: TransmissionDto) {
     </v-card>
   </v-container>
 </template>
+
+<style scoped>
+/* A row grows when a digital header is expanded. Top-aligned cells mean everything else in it —
+   the audio controls especially — stays exactly where it was instead of sliding down. */
+.tx-row > td {
+  vertical-align: top;
+  padding-top: 10px;
+}
+</style>

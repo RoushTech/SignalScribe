@@ -42,6 +42,9 @@ public class DiscardedClip : IEntityTypeConfiguration<DiscardedClip>
     /// <summary>DCS code decoded from the clip, as the octal number operators quote.</summary>
     public int? DcsCode { get; set; }
 
+    /// <summary>Modulation measured from the discriminator. Turns "not speech" into what it actually was.</summary>
+    public SignalScribe.Enums.DetectedMode Mode { get; set; }
+
     public void Configure(EntityTypeBuilder<DiscardedClip> builder)
     {
         builder.HasIndex(d => d.StartUtc);

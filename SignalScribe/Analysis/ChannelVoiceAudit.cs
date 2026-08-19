@@ -1,3 +1,5 @@
+using SignalScribe.Enums;
+
 namespace SignalScribe.Analysis;
 
 /// <summary>
@@ -23,9 +25,22 @@ public static class ChannelVoiceAudit
     /// transcribed, or never voiced enough to be worth transcribing. Recordings still sitting in
     /// the queue prove nothing yet, so a transcription backlog can never disable a live channel.
     /// </summary>
-    public static string? DisableReason(int resolvedCount, int speechCount, DateTime? lastSpeechUtc)
+    public static string? DisableReason(
+        int resolvedCount,
+        int speechCount,
+        DateTime? lastSpeechUtc,
+        DetectedMode? learnedMode = null)
     {
         if (speechCount > 0 || lastSpeechUtc is not null)
+        {
+            return null;
+        }
+
+        // A channel we can name is understood, not junk. Disabling it would drop it out of the
+        // daemon's known set and stop us decoding the very thing we just identified — and a digital
+        // voice channel produces no transcript today only because its vocoder is not wired up yet,
+        // which is a gap in us rather than evidence about the frequency.
+        if (learnedMode?.IsIdentified() == true)
         {
             return null;
         }

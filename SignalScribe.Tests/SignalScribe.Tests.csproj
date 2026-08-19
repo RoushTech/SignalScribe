@@ -19,6 +19,7 @@
   <ItemGroup>
     <ProjectReference Include="..\SignalScribe\SignalScribe.csproj" />
     <ProjectReference Include="..\SignalScribe.Capture\SignalScribe.Capture.csproj" />
+    <ProjectReference Include="..\SignalScribe.Modem\SignalScribe.Modem.csproj" />
   </ItemGroup>
 
 </Project>

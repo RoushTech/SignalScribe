@@ -37,10 +37,54 @@ public class Channel : IEntityTypeConfiguration<Channel>
     /// <summary>User-configured CTCSS/PL tone in Hz. The *measured* tone lives in <see cref="LearnedState"/> — keep config and learned state separate.</summary>
     public double? CtcssToneHz { get; set; }
 
+    /// <summary>
+    /// User-configured DCS code, as the octal number operators quote. The measured code lives in
+    /// <see cref="LearnedState"/>, same config-versus-learned split as the tone.
+    ///
+    /// CTCSS and DCS are alternative systems and a channel never carries both — a tone beating
+    /// against the 134.4 bps DCS bit clock produces a repeating, Golay-valid phantom code, which is
+    /// how 146.640 (CTCSS 146.2) once reported DCS 073. Setting either through
+    /// <see cref="SetSquelchTone"/> clears the other so the pair can never disagree.
+    /// </summary>
+    public int? DcsCode { get; set; }
+
+    /// <summary>
+    /// Sets one squelch system and clears the other, because they are alternatives rather than a
+    /// pair. Passing null for both means carrier squelch.
+    /// </summary>
+    public void SetSquelchTone(double? ctcssToneHz, int? dcsCode)
+    {
+        // A caller that supplies both is confused about the hardware, not expressing a preference:
+        // prefer the tone, since that is what the overwhelming majority of repeaters use.
+        CtcssToneHz = ctcssToneHz;
+        DcsCode = ctcssToneHz is null ? dcsCode : null;
+    }
+
+    /// <summary>
+    /// Operator-declared modulation. Null means "whatever capture measures", which is the usual case;
+    /// setting it pins a channel the operator knows better than the classifier does. The *measured*
+    /// mode lives in <see cref="LearnedState"/>, same config-versus-learned split as the tone above.
+    /// </summary>
+    public DetectedMode? Modulation { get; set; }
+
     public string? Notes { get; set; }
 
-    /// <summary>Adaptive squelch reference, dBFS. Persisted so the capture daemon survives restarts.</summary>
+    /// <summary>
+    /// Squelch reference, dBFS — the level this channel's gate measures against. Reported by the
+    /// capture daemon as it learns, and persisted so a restart does not begin from nothing.
+    /// </summary>
     public double? NoiseFloorDbfs { get; set; }
+
+    /// <summary>
+    /// Whether capture keeps re-learning this channel's floor, or holds the stored one.
+    ///
+    /// Adaptive is right almost everywhere: the noise floor moves with the band, the weather and the
+    /// receiver's own AGC, and a fixed reference goes deaf or chatty as it drifts. The exception is a
+    /// channel whose floor the tracker gets wrong — one carrying near-continuous traffic, where a
+    /// floor that creeps up toward the signal eventually squelches the very transmissions it should
+    /// be opening for. Pinning it hands that judgement to the operator.
+    /// </summary>
+    public bool AdaptiveSquelch { get; set; } = true;
 
     public string? LearnedStateJson { get; set; }
 
@@ -50,6 +94,10 @@ public class Channel : IEntityTypeConfiguration<Channel>
         get => LearnedStateJson is null ? null : JsonSerializer.Deserialize<ChannelLearnedState>(LearnedStateJson);
         set => LearnedStateJson = value is null ? null : JsonSerializer.Serialize(value);
     }
+
+    /// <summary>Reads just the learned mode out of a raw JSON column, for projections that never build the entity.</summary>
+    public static DetectedMode? ParseLearnedMode(string? learnedStateJson) =>
+        learnedStateJson is null ? null : JsonSerializer.Deserialize<ChannelLearnedState>(learnedStateJson)?.Mode;
 
     public ICollection<Transmission> Transmissions { get; set; } = [];
 
@@ -75,6 +123,16 @@ public class ChannelLearnedState
 
     /// <summary>Repeater squelch-tail duration observed after user unkey, milliseconds.</summary>
     public int? TailMs { get; set; }
+
+    /// <summary>
+    /// Modulation most recently measured on this channel. This is what lets a frequency be labelled
+    /// for what it carries — and what keeps a data or digital channel from being auto-disabled for
+    /// never producing speech, since it is now understood rather than merely silent.
+    /// </summary>
+    public DetectedMode? Mode { get; set; }
+
+    /// <summary>When <see cref="Mode"/> was last observed. A mode that has not been seen in months is stale, not wrong.</summary>
+    public DateTime? ModeUpdatedUtc { get; set; }
 
     public DateTime? UpdatedUtc { get; set; }
 }

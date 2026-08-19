@@ -1,4 +1,5 @@
 import { DiscardReason } from "@/lib/discardReason";
+import type { DetectedMode } from "@/lib/detectedMode";
 import http from "@/api/axios";
 
 export interface DiscardDto {
@@ -15,6 +16,7 @@ export interface DiscardDto {
   sustainedTone: boolean;
   ctcssHz: number | null;
   dcsCode: number | null;
+  mode: DetectedMode;
 }
 
 export interface ReasonCountDto {

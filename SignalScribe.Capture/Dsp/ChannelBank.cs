@@ -17,6 +17,42 @@ public sealed class ChannelBank : IChannelizerSink
 
     private const int MaxOpenChannels = 32;
 
+    /// <summary>
+    /// Ceiling on gates running the AFSK soft TNC at once.
+    ///
+    /// Unlike the tone and mode detectors, this one is not free: measured at ~4.7% of a core per open
+    /// gate (`PacketReceiverCostTests`) — two demodulator profiles, each a bandpass FIR, two
+    /// quadrature correlators, two AGCs, a lowpass FIR and a PLL, per sample. Running it on all 32
+    /// gates would cost about one and a half cores on top of the channelizer's 70%, and capture must
+    /// never fall behind the sample stream. Eight keeps the worst case near a third of a core while
+    /// comfortably covering the handful of gates that are ever candidates at once.
+    /// </summary>
+    private const int MaxPacketDecoders = 8;
+
+    /// <summary>
+    /// Ceiling on gates recovering 4800-baud symbols and looking for D-STAR headers.
+    ///
+    /// Measured at ~0.5% of a core per gate — thirty times cheaper than the soft TNC, because the
+    /// timing loop is a handful of operations per sample and the Viterbi decoder only runs when a
+    /// sync pattern actually matches. It could very nearly run everywhere; the cap exists so that the
+    /// worst case (a band-wide level event opening every gate at once) cannot stack with the packet
+    /// decoders and the channelizer into more than one core.
+    /// </summary>
+    private const int MaxDigitalDecoders = 16;
+
+    /// <summary>
+    /// How much of each channel's recent past to keep, so an opening gate can begin before the
+    /// carrier was noticed rather than after.
+    ///
+    /// The gate deliberately waits two blocks (~20 ms) for a carrier to persist before opening, which
+    /// is what keeps clicks and splatter out. The cost of that caution is that the first fraction of
+    /// every transmission is already gone by the time recording starts — the clipped first syllable
+    /// on analog, and on D-STAR the entire header, which is over within ~25 ms and carries the
+    /// callsigns. 150 ms covers the gate's own latency several times over and costs one sequential
+    /// frame copy per hop.
+    /// </summary>
+    public const double PreRollSeconds = 0.15;
+
     /// <summary>Hard ceiling on a single transmission. Repeater ragchews are long; noise latches are longer.</summary>
     public const double DefaultMaxOpenSeconds = 180;
 
@@ -41,6 +77,9 @@ public sealed class ChannelBank : IChannelizerSink
 
     private readonly Func<int, long> _binFrequency;
 
+    /// <summary>Bin spacing in Hz, for resolving a channel to the bin its energy lands in.</summary>
+    private readonly long _spacingHz;
+
     private readonly double _openDb;
 
     private readonly double _closeDb;
@@ -51,7 +90,33 @@ public sealed class ChannelBank : IChannelizerSink
 
     private readonly DateTime _anchorUtc;
 
-    private readonly Func<long, bool> _isKnownFrequency;
+    /// <summary>
+    /// The known channel a frequency serves, or null. Never an exact-match lookup: the known set
+    /// holds real channel frequencies while the bank asks about bin centres and snapped
+    /// measurements, and most known channels sit off the analysis grid — see
+    /// <see cref="KnownFrequencyResolver"/>.
+    /// </summary>
+    private readonly Func<long, long?> _resolveKnownFrequency;
+
+    /// <summary>What a known channel is understood to carry; <see cref="DetectedMode.Unknown"/> when we have no idea. Keyed by the known channel's real frequency, so look up with a resolved frequency, never a bin.</summary>
+    private readonly Func<long, DetectedMode> _knownMode;
+
+    /// <summary>Gates currently running the soft TNC, held under <see cref="MaxPacketDecoders"/>.</summary>
+    private int _packetDecoders;
+
+    /// <summary>Gates currently recovering digital symbols, held under <see cref="MaxDigitalDecoders"/>.</summary>
+    private int _digitalDecoders;
+
+    /// <summary>Ring of whole channelizer frames — the recent past of every channel at once.</summary>
+    private readonly float[] _preRoll;
+
+    private readonly int _preRollHops;
+
+    private readonly int _frameLength;
+
+    private int _preRollWrite;
+
+    private int _preRollFilled;
 
     private readonly Action<TransmissionIngest> _post;
 
@@ -74,6 +139,9 @@ public sealed class ChannelBank : IChannelizerSink
     private readonly double[] _blockPower;
 
     private readonly double[] _floorDb;
+
+    /// <summary>Bins whose floor the operator has pinned; the tracker leaves these alone.</summary>
+    private readonly bool[] _floorPinned;
 
     private readonly byte[] _blocksAboveOpen;
 
@@ -164,7 +232,7 @@ public sealed class ChannelBank : IChannelizerSink
         int hangMs,
         string audioRoot,
         DateTime anchorUtc,
-        Func<long, bool> isKnownFrequency,
+        Func<long, long?> resolveKnownFrequency,
         Action<TransmissionIngest> post,
         ILogger logger,
         double deviationHz = NbfmDemodulator.DefaultDeviationHz,
@@ -172,7 +240,8 @@ public sealed class ChannelBank : IChannelizerSink
         long monitorHighHz = long.MaxValue,
         Action<DiscardIngest>? postDiscard = null,
         double maxOpenSeconds = DefaultMaxOpenSeconds,
-        double clipRolloverSeconds = DefaultClipRolloverSeconds)
+        double clipRolloverSeconds = DefaultClipRolloverSeconds,
+        Func<long, DetectedMode>? knownMode = null)
     {
         // Bins outside the monitored range are never gated: they sit beyond the SDR's analog
         // passband where levels collapse to ~-100 dBFS and fluctuate enough to trip squelch.
@@ -199,21 +268,114 @@ public sealed class ChannelBank : IChannelizerSink
         _outputRate = outputRate;
         _centerHz = centerHz;
         _binFrequency = binFrequency;
+
+        // Derived rather than passed: the bin spacing is already implied by the frequency map, and a
+        // second source for it could disagree with the first.
+        _spacingHz = channelCount > 1 ? Math.Abs(binFrequency(1) - binFrequency(0)) : 12_500;
         _openDb = openDb;
         _closeDb = closeDb;
         _hangBlocks = Math.Max(1, (int)(hangMs / 1000.0 * outputRate / (BlockHopsMask + 1)));
         _audioRoot = audioRoot;
         _anchorUtc = anchorUtc;
-        _isKnownFrequency = isKnownFrequency;
+        _resolveKnownFrequency = resolveKnownFrequency;
+        _knownMode = knownMode ?? (_ => DetectedMode.Unknown);
+
+        _frameLength = channelCount * 2;
+        _preRollHops = Math.Max(1, (int)(outputRate * PreRollSeconds));
+        _preRoll = new float[(long)_preRollHops * _frameLength <= int.MaxValue
+            ? _preRollHops * _frameLength
+            : throw new ArgumentException("Pre-roll buffer would exceed addressable size", nameof(channelCount))];
         _post = post;
         _logger = logger;
         _blockPower = new double[channelCount];
         _floorDb = new double[channelCount];
+        _floorPinned = new bool[channelCount];
         _blocksAboveOpen = new byte[channelCount];
         Array.Fill(_floorDb, -110.0);
     }
 
     public int OpenGateCount => _active.Count;
+
+    /// <summary>
+    /// Applies the host's stored squelch references and adaptive flags.
+    ///
+    /// A floor learned over hours is thrown away by a restart otherwise, and the daemon spends its
+    /// first minutes back either deaf or chattering while it relearns from a fixed seed. Seeding
+    /// from the host also means an operator pinning a floor takes effect on the next refresh rather
+    /// than needing capture bounced.
+    /// </summary>
+    public void ApplySquelchState(IReadOnlyList<ChannelSquelchInfo> channels)
+    {
+        // Bins are the unit here, channels are what the host knows, and the two do not line up on a
+        // 5 kHz band plan — resolve each channel to the bin whose energy it actually lands in.
+        var byBin = new Dictionary<int, ChannelSquelchInfo>();
+        for (var c = 0; c < _channelCount; c++)
+        {
+            if (!_gateable[c])
+            {
+                continue;
+            }
+
+            var binHz = _binFrequency(c);
+            foreach (var channel in channels)
+            {
+                if (Math.Abs(channel.FrequencyHz - binHz) <= _spacingHz / 2)
+                {
+                    byBin[c] = channel;
+                    break;
+                }
+            }
+        }
+
+        foreach (var (bin, channel) in byBin)
+        {
+            _floorPinned[bin] = !channel.Adaptive;
+            if (channel.NoiseFloorDbfs is { } floor)
+            {
+                // Pinned: the stored value *is* the reference, and nothing may move it.
+                //
+                // Adaptive: the stored value is only a better starting point than the fixed -110
+                // seed, and warm-up refines it from there. It deliberately does not survive
+                // warm-up, because a stale floor that is too *low* — a gain setting changed while
+                // the daemon was down — has the gate chattering on noise, and the tracker's slow
+                // upward correction would take seconds to climb out of it. A floor the operator
+                // wants held is what the pin is for.
+                if (!channel.Adaptive || !_floorsSeeded)
+                {
+                    _floorDb[bin] = floor;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Current squelch references for the bins that serve known channels, for the host to persist.
+    /// Only settled floors are offered: reporting the fixed initial seed would overwrite a real
+    /// stored value with a placeholder every time the daemon restarted.
+    /// </summary>
+    public List<NoiseFloorReport> LearnedFloors()
+    {
+        var reports = new List<NoiseFloorReport>();
+        if (!_floorsSeeded)
+        {
+            return reports;
+        }
+
+        for (var c = 0; c < _channelCount; c++)
+        {
+            if (!_gateable[c] || _floorPinned[c])
+            {
+                continue;
+            }
+
+            if (_resolveKnownFrequency(_binFrequency(c)) is { } known)
+            {
+                reports.Add(new NoiseFloorReport(known, Math.Round(_floorDb[c], 1)));
+            }
+        }
+
+        return reports;
+    }
 
     /// <summary>Snapshot of what capture is recording right now — streamed to the UI.</summary>
     public List<ActiveGate> ActiveGates(long hopIndex)
@@ -225,7 +387,7 @@ public sealed class ChannelBank : IChannelizerSink
                 tx.ReportedFrequencyHz,
                 Math.Round((hopIndex - tx.StartHop) / _outputRate, 1),
                 Math.Round(tx.PeakDbfs, 1),
-                _isKnownFrequency(tx.ReportedFrequencyHz)));
+                _resolveKnownFrequency(tx.ReportedFrequencyHz) is not null));
         }
 
         gates.Sort((a, b) => a.FrequencyHz.CompareTo(b.FrequencyHz));
@@ -234,6 +396,14 @@ public sealed class ChannelBank : IChannelizerSink
 
     public void OnHop(ReadOnlySpan<float> channelsInterleaved, long hopIndex)
     {
+        // Keep the recent past of every channel, so a gate that opens can start from before the
+        // carrier appeared rather than from the moment it was noticed. One sequential copy of the
+        // whole frame is cheaper than picking channels apart, and it costs the same whether one gate
+        // opens or thirty.
+        channelsInterleaved.CopyTo(_preRoll.AsSpan(_preRollWrite * _frameLength, _frameLength));
+        _preRollWrite = _preRollWrite + 1 == _preRollHops ? 0 : _preRollWrite + 1;
+        _preRollFilled = Math.Min(_preRollFilled + 1, _preRollHops);
+
         for (var c = 0; c < _channelCount; c++)
         {
             var re = channelsInterleaved[2 * c];
@@ -319,7 +489,10 @@ public sealed class ChannelBank : IChannelizerSink
                 // (they adapt toward clipped garbage), and this restores them at once — but if a
                 // real transmission happens to be on the air as the guard expires, adopting its
                 // level as the floor would blind that channel for as long as it kept talking.
-                _floorDb[c] = Math.Min(_floorDb[c], db[c]);
+                if (!_floorPinned[c])
+                {
+                    _floorDb[c] = Math.Min(_floorDb[c], db[c]);
+                }
                 _blocksAboveOpen[c] = 0;
             }
         }
@@ -331,7 +504,10 @@ public sealed class ChannelBank : IChannelizerSink
             _globalSeeded = true;
             for (var c = 0; c < _channelCount; c++)
             {
-                _floorDb[c] = db[c];
+                if (!_floorPinned[c])
+                {
+                    _floorDb[c] = db[c];
+                }
                 _blockPower[c] = 0;
             }
 
@@ -344,7 +520,10 @@ public sealed class ChannelBank : IChannelizerSink
         {
             for (var c = 0; c < _channelCount; c++)
             {
-                _floorDb[c] += 0.3 * (db[c] - _floorDb[c]);
+                if (!_floorPinned[c])
+                {
+                    _floorDb[c] += 0.3 * (db[c] - _floorDb[c]);
+                }
                 _blockPower[c] = 0;
             }
 
@@ -403,8 +582,13 @@ public sealed class ChannelBank : IChannelizerSink
             }
 
             // Closed channel: track the noise floor (fast down, slow up so transmissions don't drag it).
-            var floor = _floorDb[c];
-            _floorDb[c] = db[c] < floor ? floor + 0.2 * (db[c] - floor) : floor + 0.005 * (db[c] - floor);
+            // A pinned channel keeps the reference the operator set and only the gate decision below
+            // uses it — the point of pinning is a floor the tracker gets wrong.
+            if (!_floorPinned[c])
+            {
+                var floor = _floorDb[c];
+                _floorDb[c] = db[c] < floor ? floor + 0.2 * (db[c] - floor) : floor + 0.005 * (db[c] - floor);
+            }
 
             // Open: threshold over floor, sustained for 2 consecutive blocks (keying clicks and other
             // broadband impulses die in one), + local max vs neighbors (kills adjacent-bin double-capture).
@@ -442,7 +626,10 @@ public sealed class ChannelBank : IChannelizerSink
             _logger.LogDebug("Level event: {Count} gates met the open threshold in one block — suppressed", _opening.Count);
             foreach (var c in _opening)
             {
-                _floorDb[c] = db[c];
+                if (!_floorPinned[c])
+                {
+                    _floorDb[c] = db[c];
+                }
                 _blocksAboveOpen[c] = 0;
             }
         }
@@ -494,7 +681,10 @@ public sealed class ChannelBank : IChannelizerSink
         // fast-down tracking recovers the real floor within a few blocks.
         foreach (var bin in _latched)
         {
-            _floorDb[bin] = db[bin];
+            if (!_floorPinned[bin])
+            {
+                _floorDb[bin] = db[bin];
+            }
             _blocksAboveOpen[bin] = 0;
         }
 
@@ -525,20 +715,121 @@ public sealed class ChannelBank : IChannelizerSink
     private void Open(int bin, long hopIndex, double powerDb, long? gateOpenedHop = null)
     {
         var freq = _binFrequency(bin);
-        var startUtc = _anchorUtc.AddSeconds(hopIndex / _outputRate);
+
+        // A clip rollover is a continuation, not a new transmission: its audio already runs up to
+        // this hop, and replaying the pre-roll would repeat a slice of what was just written.
+        var preRollHops = gateOpenedHop is null ? _preRollFilled : 0;
+
+        // The recording genuinely starts where the pre-roll starts, so the timestamp and the filename
+        // have to say so — otherwise every clip claims to begin later than its own first sample.
+        var startHop = hopIndex - preRollHops;
+        var startUtc = _anchorUtc.AddSeconds(startHop / _outputRate);
         var relPath = Path.Combine(startUtc.ToString("yyyy-MM-dd"), $"{freq}_{startUtc:HHmmss_fff}.ogg");
         try
         {
-            var tx = new ActiveTransmission(freq, bin, hopIndex, startUtc, relPath,
-                Path.Combine(_audioRoot, relPath), _outputRate, _deviationHz);
+            var tx = new ActiveTransmission(freq, bin, startHop, startUtc, relPath,
+                Path.Combine(_audioRoot, relPath), _outputRate, _deviationHz,
+                ShouldDecodePackets(freq), ShouldDecodeDigital(freq),
+                preRollMs: (int)(preRollHops * 1000 / _outputRate));
             tx.PeakDbfs = powerDb;
+
+            // The safety valve and the rollover clock measure from when the *gate* opened, not from
+            // where the audio starts — pre-roll must not make a transmission look older than it is.
             tx.GateOpenedHop = gateOpenedHop ?? hopIndex;
             _active[bin] = tx;
+            if (tx.DecodingPackets)
+            {
+                _packetDecoders++;
+            }
+
+            if (tx.DecodingDigital)
+            {
+                _digitalDecoders++;
+            }
+
+            ReplayPreRoll(tx, bin, preRollHops);
         }
         catch (Exception ex)
         {
             _logger.LogError("Failed to open clip for {Freq}: {Message}", freq, ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Feeds a freshly opened transmission the channel's recent past, oldest first.
+    ///
+    /// Squelch is reported as *absent* throughout: this audio is from before the gate decided there
+    /// was a carrier, so most of it is noise. The measurements that describe the transmission — the
+    /// carrier-offset average and the modulation histogram — are gated on squelch and so correctly
+    /// ignore it, while the decoders are not, and so get exactly what they were missing.
+    /// </summary>
+    private void ReplayPreRoll(ActiveTransmission tx, int bin, int hops)
+    {
+        if (hops <= 0)
+        {
+            return;
+        }
+
+        tx.SignalPresent = false;
+
+        var oldest = ((_preRollWrite - hops) % _preRollHops + _preRollHops) % _preRollHops;
+        for (var i = 0; i < hops; i++)
+        {
+            var slot = (oldest + i) % _preRollHops;
+            var offset = (slot * _frameLength) + (2 * bin);
+            tx.FeedIq(_preRoll[offset], _preRoll[offset + 1]);
+        }
+
+        tx.SignalPresent = true;
+    }
+
+    /// <summary>
+    /// Whether this gate should run the soft TNC. The rule is to spend it only where it could change
+    /// the answer:
+    /// <list type="bullet">
+    /// <item>An <b>unknown frequency</b> — this is where identification matters most, because a
+    /// packet burst is otherwise discarded as not-speech and the frequency stays invisible. A decoded
+    /// frame is what turns it into a labelled channel.</item>
+    /// <item>A channel already understood to carry <b>data</b> — that is where the packets are, and
+    /// once decoding created the channel it must keep decoding it, or the channel would go quiet the
+    /// moment it became known.</item>
+    /// </list>
+    /// A known analog voice repeater is deliberately excluded. That does give up the mismatch case
+    /// the tone detector runs everywhere to catch — but the tone detector costs 0.1% of a core and
+    /// this costs 4.7%, and the free <see cref="ModeClassifier"/> still watches every gate, so a
+    /// repeater that starts carrying data shows up as two-level digital and can be enabled.
+    /// </summary>
+    private bool ShouldDecodePackets(long frequencyHz)
+    {
+        if (_packetDecoders >= MaxPacketDecoders)
+        {
+            return false;
+        }
+
+        var known = _resolveKnownFrequency(frequencyHz);
+        return known is null || _knownMode(known.Value).IsData();
+    }
+
+    /// <summary>
+    /// Whether this gate should recover digital symbols. Same reasoning as the soft TNC — spend it
+    /// where it can change the answer — but the budget is wider because it is far cheaper: an unknown
+    /// frequency, or a channel already understood to carry something digital, whether voice or data.
+    /// </summary>
+    private bool ShouldDecodeDigital(long frequencyHz)
+    {
+        if (_digitalDecoders >= MaxDigitalDecoders)
+        {
+            return false;
+        }
+
+        var known = _resolveKnownFrequency(frequencyHz);
+        if (known is null)
+        {
+            return true;
+        }
+
+        var mode = _knownMode(known.Value);
+        return mode.IsDigitalVoice() || mode.IsData();
     }
 
     private void Finalize(int bin, long hopIndex)
@@ -548,10 +839,27 @@ public sealed class ChannelBank : IChannelizerSink
             return;
         }
 
+        if (tx.DecodingPackets)
+        {
+            _packetDecoders--;
+        }
+
+        if (tx.DecodingDigital)
+        {
+            _digitalDecoders--;
+        }
+
         try
         {
-            var ingest = tx.Finish(hopIndex, out var verdict, out var absPath);
-            var known = _isKnownFrequency(tx.FrequencyHz);
+            // Resolve against the snapped measurement, not the raw bin: the known set holds real
+            // channel frequencies, and an off-grid channel (147.180 on a 147.175 bin) never
+            // exact-matches its own bin. Posting the resolved frequency matters just as much — a
+            // clip whose offset never settled reports its bin centre otherwise, and bin centres
+            // arriving at the host spring phantom half-grid channels into existence (144.3875
+            // collected 29 clips that belonged to 144.390 before auto-disabling itself).
+            var knownFrequency = _resolveKnownFrequency(tx.ReportedFrequencyHz);
+            var ingest = tx.Finish(hopIndex, out var verdict, out var absPath, knownFrequency);
+            var known = knownFrequency is not null;
 
             // Signal-present time, not wall clock: a key-up transient on a neighbouring channel opens
             // a gate for a block or two, then hang time holds it open long enough to look like a real
@@ -559,15 +867,22 @@ public sealed class ChannelBank : IChannelizerSink
             var presentMs = tx.AboveBlocks * (BlockHopsMask + 1) * 1000.0 / _outputRate;
             var tooShort = presentMs < SignalScribe.Analysis.DiscardClassifier.MinPresentMs;
 
-            if (tx.OverloadArtifact || tooShort || (!known && !verdict.VoiceLike))
+            // Sounding like voice is no longer the only way to earn a channel: a transmission we can
+            // *name* has told us what the frequency is, which is the thing the voice gate was really
+            // standing in for. Note this takes a specifically identified mode — "some kind of digital"
+            // deliberately does not qualify, or an unidentified packet frequency would start hoarding
+            // every burst again (see DetectedModeExtensions.IsIdentified).
+            if (tx.OverloadArtifact || tooShort || (!known && !verdict.VoiceLike && !ingest.Mode.IsIdentified()))
             {
-                // Click/spur, or non-voice on an unknown frequency: no channel is born. The clip is
-                // reported (not deleted) so the operator can review the gate's decision; the host
-                // purges these on a retention schedule.
+                // Click/spur, or unrecognised non-voice on an unknown frequency: no channel is born.
+                // The clip is reported (not deleted) so the operator can review the gate's decision;
+                // the host purges these on a retention schedule.
                 var reason = SignalScribe.Analysis.DiscardClassifier.Classify(
                     tx.OverloadArtifact, presentMs, verdict.HeterodyneTone, verdict.SpeechBandRatio,
-                    verdict.SyllableRateHz, verdict.VoicedMs, verdict.ModulationDepth);
-                _logger.LogInformation("Discarded {Freq} Hz: {Reason} — {Verdict}", tx.FrequencyHz, reason, verdict);
+                    verdict.SyllableRateHz, verdict.VoicedMs, verdict.ModulationDepth, ingest.Mode);
+                _logger.LogInformation(
+                    "Discarded {Freq} Hz: {Reason} — {Verdict}; {Mode} {Score}, {Syncs}",
+                    tx.FrequencyHz, reason, verdict, ingest.Mode, tx.ModeScore, tx.SyncSummary);
 
                 if (_postDiscard is null)
                 {
@@ -579,13 +894,18 @@ public sealed class ChannelBank : IChannelizerSink
                     ingest.FrequencyHz, ingest.StartUtc, ingest.EndUtc, ingest.AudioPath,
                     ingest.PeakDbfs, reason, verdict.VoicedMs, Math.Round(verdict.SpeechBandRatio, 3),
                     Math.Round(verdict.ModulationDepth, 3), Math.Round(verdict.SyllableRateHz, 1),
-                    verdict.SustainedTone, tx.CtcssHz, tx.DcsCode));
+                    verdict.SustainedTone, tx.CtcssHz, tx.DcsCode, ingest.Mode));
                 return;
             }
 
+            // Log what was actually posted, with the bin alongside when they differ: an off-grid
+            // channel is recorded on one frequency and filed under another, and a log naming only
+            // the bin cannot be matched against the channel list at all.
             _logger.LogInformation(
-                "Posting {Freq} Hz ({Ms} ms, peak {Peak} dBFS, {Markers} markers)",
-                tx.FrequencyHz, (int)(ingest.EndUtc - ingest.StartUtc).TotalMilliseconds, ingest.PeakDbfs, ingest.Markers.Count);
+                "Posting {Freq} Hz{Bin} ({Ms} ms, peak {Peak} dBFS, {Mode} {Score}, {Syncs}, {Markers} markers)",
+                ingest.FrequencyHz,
+                ingest.FrequencyHz == tx.FrequencyHz ? string.Empty : $" (bin {tx.FrequencyHz})",
+                (int)(ingest.EndUtc - ingest.StartUtc).TotalMilliseconds, ingest.PeakDbfs, ingest.Mode, tx.ModeScore, tx.SyncSummary, ingest.Markers.Count);
             _post(ingest);
         }
         catch (Exception ex)
@@ -628,7 +948,7 @@ internal sealed class ActiveTransmission
 
     private long _lastHop;
 
-    public ActiveTransmission(long frequencyHz, int bin, long startHop, DateTime startUtc, string relPath, string absPath, double hopRate, double deviationHz)
+    public ActiveTransmission(long frequencyHz, int bin, long startHop, DateTime startUtc, string relPath, string absPath, double hopRate, double deviationHz, bool decodePackets = false, bool decodeDigital = false, int preRollMs = 0)
     {
         FrequencyHz = frequencyHz;
         StartHop = startHop;
@@ -638,11 +958,28 @@ internal sealed class ActiveTransmission
         _relPath = relPath;
         _absPath = absPath;
         _hopRate = hopRate;
-        _demod = new NbfmDemodulator(hopRate, deviationHz);
+        DecodingPackets = decodePackets;
+        DecodingDigital = decodeDigital;
+        _demod = new NbfmDemodulator(hopRate, deviationHz, decodePackets, decodeDigital);
         _writer = new OpusClipWriter(absPath);
         _analyzer = new AudioAnalyzer();
-        _markers.Add(new MarkerIngest(MarkerType.RfEdgeRise, 0, 1.0));
+        // The RF edge is where the gate actually opened, which with pre-roll is no longer the start
+        // of the clip. Marking it at zero would tell segmentation the carrier appeared during what
+        // is really the quiet lead-in.
+        _markers.Add(new MarkerIngest(MarkerType.RfEdgeRise, preRollMs, 1.0));
     }
+
+    /// <summary>Whether this gate is running the soft TNC — held against the bank's decoder budget.</summary>
+    public bool DecodingPackets { get; }
+
+    /// <summary>Whether this gate is recovering digital symbols — held against the bank's decoder budget.</summary>
+    public bool DecodingDigital { get; }
+
+    /// <summary>AX.25 packets decoded from this transmission.</summary>
+    public IReadOnlyList<TimedPacket> Packets => _demod.Packets;
+
+    /// <summary>D-STAR headers decoded from this transmission.</summary>
+    public IReadOnlyList<Digital.DStar.DStarHeader> DStarHeaders => _demod.DStarHeaders;
 
     public long FrequencyHz { get; }
 
@@ -675,6 +1012,16 @@ internal sealed class ActiveTransmission
     public bool OverloadArtifact { get; set; }
 
     /// <summary>CTCSS tone read from under the audio, if any.</summary>
+    /// <summary>Measurements behind the mode verdict — logged with discards so a misread is diagnosable from the field.</summary>
+    public ModeScore ModeScore => _demod.ModeScore;
+
+    /// <summary>Sync words seen by the framer path, per mode, as a compact log string.</summary>
+    public string SyncSummary =>
+        $"{_demod.SyncCount(DetectedMode.Dmr)} DMR / {_demod.SyncCount(DetectedMode.P25Phase1)} P25 / "
+        + $"{_demod.SyncCount(DetectedMode.Ysf)} YSF / {_demod.SyncCount(DetectedMode.Nxdn)} NXDN / "
+        + $"{_demod.DStarFrameSyncCount} D-STAR fs sync(s), {_demod.DStarCadencedFrameSyncCount} cadenced; "
+        + $"Fusion {_demod.YsfSummary}";
+
     public double? CtcssHz => _demod.CtcssHz;
 
     /// <summary>DCS code read from under the audio, if any.</summary>
@@ -719,12 +1066,13 @@ internal sealed class ActiveTransmission
         }
     }
 
-    public TransmissionIngest Finish(long endHopAbsolute, out AudioVerdict verdict, out string absPath)
+    public TransmissionIngest Finish(long endHopAbsolute, out AudioVerdict verdict, out string absPath, long? knownFrequencyHz = null)
     {
         FlushPcm();
         _writer.Dispose();
         verdict = _analyzer.Finish();
         absPath = _absPath;
+        _demod.DumpUndecodedFusion(_absPath);
 
         foreach (var tone in _analyzer.ToneEvents)
         {
@@ -743,9 +1091,11 @@ internal sealed class ActiveTransmission
 
         // Report the true carrier, not the filterbank bin centre: amateur channels sit on a 5 kHz
         // grid that the 12.5 kHz analysis grid does not align with (e.g. 146.790 lands on the
-        // 146.7875 bin). The discriminator DC gives us the offset to correct it.
+        // 146.7875 bin). The discriminator DC gives us the offset to correct it — and when the bin
+        // serves a known channel, that channel's frequency outranks the measurement, so clips whose
+        // offset never settled do not post under a bin centre and fragment the channel's history.
         return new TransmissionIngest(
-            ReportedFrequencyHz,
+            knownFrequencyHz ?? ReportedFrequencyHz,
             _startUtc,
             _startUtc.AddMilliseconds(durationMs),
             _relPath,
@@ -755,7 +1105,20 @@ internal sealed class ActiveTransmission
             _markers,
             verdict.VoicedMs,
             _demod.CtcssHz,
-            _demod.DcsCode);
+            _demod.DcsCode,
+            _demod.Mode,
+            [.. _demod.Packets.Select(p => new PacketIngest(
+                p.OffsetMs,
+                p.DurationMs,
+                p.Packet.Tnc2,
+                p.Packet.Frame.Source.ToString(),
+                p.Packet.Frame.Destination.ToString()))],
+            [.. _demod.DecodedHeaders.Select(h => new DigitalHeaderIngest(
+                0,
+                h.Mode,
+                h.Callsign,
+                h.Summary,
+                [.. h.Fields]))]);
     }
 
     private int ElapsedMs() => (int)(_lastHop * 1000 / _hopRate);

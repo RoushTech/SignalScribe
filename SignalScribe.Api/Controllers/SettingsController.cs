@@ -54,6 +54,11 @@ public class SettingsController(SignalScribeContext db, IHubContext<StatusHub> h
         settings.SummaryThreads = Math.Clamp(dto.SummaryThreads, 0, 64);
         settings.Paused = dto.Paused;
         settings.DiscardRetentionHours = Math.Clamp(dto.DiscardRetentionHours, 1, 720);
+        settings.NoSpeechRetentionHours = Math.Clamp(dto.NoSpeechRetentionHours, 1, 8_760);
+
+        // Capped well under the job lease: gathered jobs are held under lease while they wait, and
+        // a gather longer than the lease would hand them to another worker mid-wait.
+        settings.TranscriptionGatherSeconds = Math.Clamp(dto.TranscriptionGatherSeconds, 0, 120);
         await db.SaveChangesAsync();
 
         await hub.Clients.All.SendAsync(HubEvents.SettingsChanged, ServiceNames.Workers);
@@ -88,5 +93,6 @@ public class SettingsController(SignalScribeContext db, IHubContext<StatusHub> h
 
     internal static WorkerSettingsDto ToDto(Data.Models.WorkerSettings s) => new(
         s.WhisperModel, s.TranscriptionPrompt, s.SummaryModel, s.MaxJobsPerClaim,
-        s.TranscriptionThreads, s.SummaryThreads, s.Paused, s.DiscardRetentionHours);
+        s.TranscriptionThreads, s.SummaryThreads, s.Paused, s.DiscardRetentionHours,
+        s.NoSpeechRetentionHours, s.TranscriptionGatherSeconds);
 }

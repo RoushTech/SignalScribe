@@ -87,8 +87,17 @@ public class ChannelsController(SignalScribeContext db) : ControllerBase
         channel.Enabled = request.Enabled;
         channel.Callsign = request.Callsign;
         channel.Description = request.Description;
-        channel.CtcssToneHz = request.CtcssToneHz;
+        channel.SetSquelchTone(request.CtcssToneHz, request.DcsCode);
         channel.Notes = request.Notes;
+        channel.Modulation = request.Modulation;
+        channel.AdaptiveSquelch = request.AdaptiveSquelch;
+
+        // A pinned floor is the operator's to set; an adaptive one belongs to the daemon and must
+        // not be overwritten from a settings form that was rendered minutes ago.
+        if (!request.AdaptiveSquelch && request.NoiseFloorDbfs is { } floor)
+        {
+            channel.NoiseFloorDbfs = floor;
+        }
     }
 
     private static ChannelDto ToDto(Channel c, int transmissionCount, DateTime? lastHeardUtc) => new(
@@ -100,10 +109,15 @@ public class ChannelsController(SignalScribeContext db) : ControllerBase
         c.Callsign,
         c.Description,
         c.CtcssToneHz,
+        c.DcsCode,
         c.Notes,
         c.NoiseFloorDbfs,
+        c.AdaptiveSquelch,
         c.LearnedState?.CtcssToneHz,
         c.LearnedState?.DcsCode,
+        c.Modulation,
+        c.LearnedState?.Mode,
+        c.LearnedState?.ModeUpdatedUtc,
         transmissionCount,
         lastHeardUtc,
         c.AutoDisabledReason,

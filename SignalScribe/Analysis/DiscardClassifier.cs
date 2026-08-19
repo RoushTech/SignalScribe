@@ -19,7 +19,8 @@ public static class DiscardClassifier
         double speechBandRatio,
         double syllableRateHz,
         int voicedMs,
-        double modulationDepth)
+        double modulationDepth,
+        DetectedMode mode = DetectedMode.Unknown)
     {
         if (overload)
         {
@@ -29,6 +30,14 @@ public static class DiscardClassifier
         if (presentMs < MinPresentMs)
         {
             return DiscardReason.TooShort;
+        }
+
+        // Ahead of the audio tests because it explains them rather than competing with them: data
+        // has no speech band, no syllable rhythm and often a steady-looking envelope, so all three
+        // would fire and each would be a symptom rather than the reason.
+        if (mode == DetectedMode.DigitalUnknown)
+        {
+            return DiscardReason.DigitalNotIdentified;
         }
 
         if (sustainedTone)

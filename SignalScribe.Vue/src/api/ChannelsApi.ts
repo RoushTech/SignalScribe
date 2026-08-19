@@ -1,4 +1,5 @@
 import http from "@/api/axios";
+import type { DetectedMode } from "@/lib/detectedMode";
 
 export enum ChannelType {
   Unknown = 0,
@@ -15,10 +16,16 @@ export interface ChannelDto {
   callsign: string | null;
   description: string | null;
   ctcssToneHz: number | null;
+  dcsCode: number | null;
   notes: string | null;
   noiseFloorDbfs: number | null;
+  /** True while capture keeps re-learning the floor; false means the stored floor is pinned. */
+  adaptiveSquelch: boolean;
   measuredCtcssToneHz: number | null;
   measuredDcsCode: number | null;
+  modulation: DetectedMode | null;
+  measuredMode: DetectedMode | null;
+  modeUpdatedUtc: string | null;
   transmissionCount: number;
   lastHeardUtc: string | null;
   autoDisabledReason: string | null;
@@ -32,8 +39,14 @@ export interface ChannelUpsertRequest {
   enabled: boolean;
   callsign: string | null;
   description: string | null;
+  // CTCSS and DCS are alternative systems, never both — the server clears one when the other is set.
   ctcssToneHz: number | null;
+  dcsCode: number | null;
   notes: string | null;
+  modulation: DetectedMode | null;
+  adaptiveSquelch: boolean;
+  /** Only honoured by the server when adaptiveSquelch is false. */
+  noiseFloorDbfs: number | null;
 }
 
 export class ChannelsApi {

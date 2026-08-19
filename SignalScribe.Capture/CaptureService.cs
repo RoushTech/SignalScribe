@@ -3,6 +3,7 @@ using SignalScribe.Capture.HostApi;
 using SignalScribe.Capture.Settings;
 using SignalScribe.Capture.Sources;
 using SignalScribe.Contracts;
+using SignalScribe.Enums;
 
 namespace SignalScribe.Capture;
 
@@ -81,6 +82,7 @@ public sealed class CaptureService(
         var s = settings.Current;
         var channelizer = new PolyphaseChannelizer(source.SampleRate, s?.ChannelSpacingHz ?? 12_500);
         var knownFrequencies = await hostClient.GetKnownFrequenciesAsync(ct) ?? [];
+        var channelModes = await hostClient.GetChannelModesAsync(ct) ?? [];
         var bank = new ChannelBank(
             channelizer.ChannelCount,
             channelizer.OutputSampleRate,
@@ -91,13 +93,21 @@ public sealed class CaptureService(
             s?.SquelchHangMs ?? 400,
             config.GetValue("Capture:AudioDirectory", "audio")!,
             anchorUtc,
-            freq => knownFrequencies.Contains(freq),
+            freq => KnownFrequencyResolver.Nearest(knownFrequencies, freq, (long)(channelizer.ChannelSpacingHz / 2)),
             ingest => _ = hostClient.PostTransmissionAsync(ingest, CancellationToken.None),
             logger,
             s?.DeviationHz ?? NbfmDemodulator.DefaultDeviationHz,
             s?.MonitorLowHz ?? 144_000_000,
             s?.MonitorHighHz ?? 148_000_000,
-            discard => _ = hostClient.PostDiscardAsync(discard, CancellationToken.None));
+            discard => _ = hostClient.PostDiscardAsync(discard, CancellationToken.None),
+            knownMode: freq => channelModes.GetValueOrDefault(freq, DetectedMode.Unknown));
+
+        // Start from the floors the last run learned rather than from a fixed seed, so the daemon is
+        // not deaf or chattering through its first minutes back.
+        if (await hostClient.GetChannelSquelchAsync(ct) is { } storedSquelch)
+        {
+            bank.ApplySquelchState(storedSquelch);
+        }
 
         // Front-end overload is ground truth from the hardware: while the ADC is clipping, every bin
         // carries compression products rather than signal. Feeding it to the bank holds every gate
@@ -161,6 +171,27 @@ public sealed class CaptureService(
                         knownFrequencies.Clear();
                         knownFrequencies.UnionWith(refreshed);
                     }
+
+                    var refreshedModes = await hostClient.GetChannelModesAsync(ct);
+                    if (refreshedModes is not null)
+                    {
+                        channelModes.Clear();
+                        foreach (var (freq, mode) in refreshedModes)
+                        {
+                            channelModes[freq] = mode;
+                        }
+                    }
+
+                    // Re-apply on every refresh, not just at startup, so pinning a floor in the UI
+                    // takes effect without bouncing the daemon.
+                    var squelch = await hostClient.GetChannelSquelchAsync(ct);
+                    if (squelch is not null)
+                    {
+                        bank.ApplySquelchState(squelch);
+                    }
+
+                    // And report back what has been learned, so it outlives this process.
+                    await hostClient.PostNoiseFloorsAsync(bank.LearnedFloors(), ct);
                 }
 
                 if (now - lastEnumerate > EnumerateInterval)
